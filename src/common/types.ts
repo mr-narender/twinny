@@ -65,6 +65,72 @@ export type ChatCompletionMessage = ChatCompletionMessageParam & {
   prompt?: string
   /** How a reply came about; shown under it, never sent to the model. */
   meta?: ReplyMeta
+  /** The tools the model used for this reply, shown above it; never sent to the model. */
+  toolSteps?: ToolStepView[]
+  /**
+   * What those tools were asked and returned, cut to size. Not shown; the
+   * next turn sends it along with the user's question, so a follow-up
+   * ("now the same in the other file") has what this reply worked from.
+   */
+  toolNotes?: string
+  /**
+   * The files agent mode changed while writing this reply, with what it
+   * takes to undo them; shown under it, never sent to the model.
+   */
+  changes?: ReplyChangesView
+}
+
+/** A file agent mode changed during a reply, as the chat lists it. */
+export interface FileChangeView {
+  /** Relative to the workspace root, with `/`. */
+  path: string
+  status: "modified" | "created" | "deleted"
+  added: number
+  removed: number
+  /** Put back as it was before the reply. */
+  undone?: boolean
+  /** No copy was kept (binary, or too large), so it cannot be undone from the chat. */
+  noUndo?: boolean
+}
+
+/** What one reply changed, by the id its copies are kept under. */
+export interface ReplyChangesView {
+  id: string
+  files: FileChangeView[]
+}
+
+/** One tool call as the chat shows it: collapsed to a line, open to what went in and came out. */
+export interface ToolStepView {
+  id: string
+  name: string
+  /** What it did, in a line: "searched for `foo` · 3 matches". */
+  summary: string
+  args?: Record<string, string>
+  /** What the model was given back, cut to a size worth showing. */
+  output?: string
+  /** `stopped`: the reply was stopped while the tool was running or waiting. */
+  status: "running" | "waiting" | "done" | "failed" | "skipped" | "stopped"
+  /** For a step waiting on the user: the command that would run, or the change that would be made. */
+  command?: string
+  /** What the user is asked to approve: a shell command, or a change with no diff to review (a rename, a delete). */
+  approval?: "command" | "change"
+  /**
+   * How much of the reply's text (thinking left out) was written when the
+   * step started, so the chat shows it at that point in the reply rather
+   * than above it. Missing on steps saved before this was kept.
+   */
+  at?: number
+  /** A running command the user can stop on its own, leaving the reply to carry on. */
+  stoppable?: boolean
+  /** A waiting command that cannot be set to always run: the team asks for every command. */
+  noAlways?: boolean
+  /** A waiting call to an MCP server's tool (`server/tool`): Always run keeps the tool, not the call. */
+  mcpTool?: string
+  /**
+   * Not a tool: a message the user sent while the reply worked, which the
+   * model read at this point; `summary` is what they wrote.
+   */
+  said?: boolean
 }
 
 /** What twinny knows about how one reply was produced. */
@@ -75,13 +141,28 @@ export interface ReplyMeta {
   durationMs?: number
   /** Only when the backend reported it; never estimated. */
   completionTokens?: number
+  /**
+   * Tokens the reply's largest request came to, as the backend counted
+   * it: how much of the model's context the conversation now takes.
+   */
+  promptTokens?: number
+  /** Tokens the model's context holds, when its server says. */
+  contextWindow?: number
   /** The user stopped it before the model finished. */
   stopped?: boolean
+  /** Agent mode used every tool step the reply had, so the work may be unfinished. */
+  outOfSteps?: boolean
   /**
    * Credentials the secret shield replaced with placeholders before the
    * request left the machine: kinds and counts, never the values.
    */
   withheld?: { kind: string; label: string; count: number }[]
+  /**
+   * The project's instructions for agents that agent mode followed:
+   * `AGENTS.md` at the root (or the file read in its place), then each
+   * folder's as the tools reached it. Relative paths.
+   */
+  instructions?: string[]
 }
 
 export interface Conversation {
@@ -226,6 +307,15 @@ export interface TwinnyProvider {
   label: string
   logo?: ReactNode
   modelName: string
+  /** Responses reasoning budget for ChatGPT Plan requests. Unset uses the model default. */
+  reasoningEffort?:
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max"
   provider: string
   repositoryLevel?: boolean
   type: string

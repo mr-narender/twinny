@@ -11,14 +11,24 @@ import { Markdown as TiptapMarkdown } from "tiptap-markdown"
 
 import { ASSISTANT, EVENT_NAME, TWINNY, YOU } from "../common/constants"
 import { WorkspaceSearchReport } from "../common/messaging/protocol"
-import { ChatCompletionMessage, ImageAttachment, MentionType, ReplyMeta } from "../common/types"
+import {
+  ChatCompletionMessage,
+  ImageAttachment,
+  MentionType,
+  ReplyChangesView,
+  ReplyMeta,
+  ToolStepView
+} from "../common/types"
 
 import { useSuggestion } from "./hooks/useSuggestion"
 import CodeBlock from "./code-block"
 import { createCustomImageExtension } from "./image-extension"
 import { MentionExtension } from "./mention-extention"
 import { emit } from "./messaging"
+import { ReplyChanges } from "./reply-changes"
+import { replyParts } from "./reply-parts"
 import { useToast } from "./toast"
+import ToolSteps from "./tool-steps"
 import { getThinkingMessage } from "./utils"
 import WorkspaceContext from "./workspace-context"
 
@@ -32,6 +42,8 @@ interface MessageProps {
    * carries its own in `message.context`.
    */
   context?: WorkspaceSearchReport
+  /** Tool steps behind a reply still streaming; a finished reply carries its own. */
+  steps?: ToolStepView[]
   isLoading?: boolean
   message?: ChatCompletionMessage
   messages?: ChatCompletionMessage[]
@@ -47,6 +59,8 @@ interface MessageProps {
   onDeleteImage?: (id: string) => void
   /** Ask for the rest of a reply the user stopped. Only the last reply offers it. */
   onContinue?: () => void
+  /** Keep a reply's changed files as they stand after an undo. */
+  onChangesUpdate?: (index: number, changes: ReplyChangesView) => void
 }
 
 const CustomKeyMap = Extension.create({
@@ -127,20 +141,42 @@ const ThinkingSection = React.memo(
 const formatDuration = (ms: number) =>
   ms < 1000 ? `${ms}ms` : ms < 60_000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`
 
+/** 12412 as "12.4k": enough to see how full a context is. */
+const compactCount = (count: number) =>
+  count < 1000 ? String(count) : count < 10_000 ? `${(count / 1000).toFixed(1)}k` : `${Math.round(count / 1000)}k`
+
+/** From here a context is close enough to full to say so. */
+const CONTEXT_NEARLY_FULL = 0.8
+
 /**
- * One quiet line under a reply: which model wrote it, how long it took and,
- * when the backend counted, how fast. Old conversations have no meta and
+ * One quiet line under a reply: which model wrote it, how long it took,
+ * and, when the backend counted, how fast and how much of the model's
+ * context the conversation now takes. Old conversations have no meta and
  * show nothing.
  */
-const ReplyFooter = ({ meta, onContinue }: { meta: ReplyMeta; onContinue?: () => void }) => {
+const ReplyFooter = ({
+  meta,
+  onContinue,
+  actions
+}: {
+  meta: ReplyMeta
+  onContinue?: () => void
+  /** The reply's copy and regenerate, at the line's end. */
+  actions?: React.ReactNode
+}) => {
   const { t } = useTranslation()
-  const parts: string[] = []
-  if (meta.durationMs !== undefined) parts.push(formatDuration(meta.durationMs))
+  const parts: { text: string; title?: string }[] = []
+  if (meta.durationMs !== undefined) parts.push({ text: formatDuration(meta.durationMs) })
   if (meta.completionTokens && meta.durationMs) {
     const perSecond = meta.completionTokens / (meta.durationMs / 1000)
-    parts.push(t("reply-tokens-per-second", { count: meta.completionTokens, rate: perSecond.toFixed(1) }))
+    parts.push({
+      text: t("reply-tokens-per-second", { count: meta.completionTokens, rate: perSecond.toFixed(1) }),
+      title: t("reply-tokens-title", { count: meta.completionTokens })
+    })
   }
   const title = [meta.provider, meta.model].filter(Boolean).join(" · ")
+  const used = meta.promptTokens
+  const holds = meta.contextWindow
 
   return (
     <div className={styles.replyFooter}>
@@ -150,16 +186,40 @@ const ReplyFooter = ({ meta, onContinue }: { meta: ReplyMeta; onContinue?: () =>
         </span>
       )}
       {parts.map((part) => (
-        <span key={part}>{part}</span>
+        <span key={part.text} title={part.title}>
+          {part.text}
+        </span>
       ))}
+      {!!used && (
+        <span
+          className={holds && used / holds >= CONTEXT_NEARLY_FULL ? styles.replyContextFull : undefined}
+          title={
+            holds
+              ? t("reply-context-of-title", { used: used.toLocaleString(), window: holds.toLocaleString() })
+              : t("reply-context-title", { used: used.toLocaleString() })
+          }
+        >
+          {holds
+            ? t("reply-context-of", { used: compactCount(used), window: compactCount(holds) })
+            : t("reply-context", { used: compactCount(used) })}
+        </span>
+      )}
       {meta.stopped && <span className={styles.replyStopped}>{t("reply-stopped")}</span>}
+      {meta.outOfSteps && !meta.stopped && <span className={styles.replyStopped}>{t("reply-out-of-steps")}</span>}
       {!!meta.withheld?.length && <WithheldBadge withheld={meta.withheld} />}
+      {!!meta.instructions?.length && <InstructionsBadge files={meta.instructions} />}
       {onContinue && (
-        <button type="button" className={styles.replyContinue} onClick={onContinue} title={t("reply-continue-title")}>
+        <button
+          type="button"
+          className={styles.replyContinue}
+          onClick={onContinue}
+          title={t(meta.outOfSteps && !meta.stopped ? "reply-continue-steps-title" : "reply-continue-title")}
+        >
           <span className="codicon codicon-debug-continue" aria-hidden="true" />
           {t("reply-continue")}
         </button>
       )}
+      {actions && <span className={styles.replyActions}>{actions}</span>}
     </div>
   )
 }
@@ -174,6 +234,22 @@ const WithheldBadge = ({ withheld }: { withheld: NonNullable<ReplyMeta["withheld
       <span className="codicon codicon-shield" aria-hidden="true" />
       {t("reply-withheld", { count })}
     </span>
+  )
+}
+
+/** The project's instruction files agent mode followed; opens the first. */
+const InstructionsBadge = ({ files }: { files: string[] }) => {
+  const { t } = useTranslation()
+  return (
+    <button
+      type="button"
+      className={styles.replyInstructions}
+      title={t("reply-instructions-title", { files: files.join(", ") })}
+      onClick={() => emit(EVENT_NAME.twinnyOpenFile, { path: files[0] })}
+    >
+      <span className="codicon codicon-book" aria-hidden="true" />
+      {files.length > 1 ? t("reply-instructions-more", { file: files[0], count: files.length - 1 }) : files[0]}
+    </button>
   )
 }
 
@@ -225,6 +301,7 @@ export const Message: React.FC<MessageProps> = ({
   index = 0,
   isAssistant,
   context,
+  steps,
   isLoading,
   message,
   onDelete,
@@ -233,7 +310,8 @@ export const Message: React.FC<MessageProps> = ({
   onHeightChange,
   messages,
   onDeleteImage,
-  onContinue
+  onContinue,
+  onChangesUpdate
 }) => {
   const { t } = useTranslation()
   const [isThinkingCollapsed, setIsThinkingCollapsed] = React.useState(false)
@@ -513,13 +591,80 @@ export const Message: React.FC<MessageProps> = ({
     [renderCodeBlock, renderContent, message?.images]
   )
 
-  if (!message?.content) return null
+  // A reply can be all steps and no text: its tools ran, then it was stopped.
+  if (!message) return null
+  if (!message.content && !message.toolSteps?.length && !steps?.length) return null
 
   const { thinking, message: messageContent } = getThinkingMessage(
     message.content as string
   )
 
   const conversationLength = messages?.length || 0
+  // A reply with a footer keeps its actions at the end of it; anything else floats them over its corner.
+  const footerActions = message.role === ASSISTANT && !!message.meta && !editing
+
+  const options = (
+    <div className={styles.messageOptions}>
+      <VSCodeButton
+        title={t("copy-code")}
+        onClick={() => {
+          navigator.clipboard.writeText(messageContent)
+          showToast(t("copied-to-clipboard"))
+        }}
+        appearance="icon"
+      >
+        <span className="codicon codicon-copy"></span>
+      </VSCodeButton>
+      {editing && !isAssistant && (
+        <>
+          <VSCodeButton
+            title={t("cancel-edit")}
+            appearance="icon"
+            onClick={handleToggleCancel}
+          >
+            <span className="codicon codicon-close" />
+          </VSCodeButton>
+          <VSCodeButton
+            title={t("save-edit")}
+            appearance="icon"
+            onClick={handleToggleSave}
+          >
+            <span className="codicon codicon-check" />
+          </VSCodeButton>
+        </>
+      )}
+      {!editing && !isAssistant && (
+        <>
+          <VSCodeButton
+            disabled={isLoading}
+            title={t("edit-message")}
+            appearance="icon"
+            onClick={handleToggleEditing}
+          >
+            <span className="codicon codicon-edit" />
+          </VSCodeButton>
+          <VSCodeButton
+            disabled={isLoading || conversationLength <= 2}
+            title={t("delete-message")}
+            appearance="icon"
+            onClick={handleDelete}
+          >
+            <span className="codicon codicon-trash" />
+          </VSCodeButton>
+        </>
+      )}
+      {!editing && isAssistant && (
+        <VSCodeButton
+          disabled={isLoading}
+          title={t("regenerate-message")}
+          appearance="icon"
+          onClick={handleRegenerate}
+        >
+          <span className="codicon codicon-sync" />
+        </VSCodeButton>
+      )}
+    </div>
+  )
 
   useEffect(() => {
     if (editor) editorRef.current = editor
@@ -532,7 +677,7 @@ export const Message: React.FC<MessageProps> = ({
       className={
         message.role === ASSISTANT
           ? styles.message
-          : `${styles.message} ${styles.userMessage}`
+          : `${styles.message} ${styles.userMessage}${index === 0 ? ` ${styles.firstMessage}` : ""}`
       }
     >
       {Toast}
@@ -553,79 +698,36 @@ export const Message: React.FC<MessageProps> = ({
           )}
           {message.role === ASSISTANT ? TWINNY : YOU}
         </span>
-        <div className={styles.messageOptions}>
-          <VSCodeButton
-            title={t("copy-code")}
-            onClick={() => {
-              navigator.clipboard.writeText(messageContent)
-              showToast(t("copied-to-clipboard"))
-            }}
-            appearance="icon"
-          >
-            <span className="codicon codicon-copy"></span>
-          </VSCodeButton>
-          {editing && !isAssistant && (
-            <>
-              <VSCodeButton
-                title={t("cancel-edit")}
-                appearance="icon"
-                onClick={handleToggleCancel}
-              >
-                <span className="codicon codicon-close" />
-              </VSCodeButton>
-              <VSCodeButton
-                title={t("save-edit")}
-                appearance="icon"
-                onClick={handleToggleSave}
-              >
-                <span className="codicon codicon-check" />
-              </VSCodeButton>
-            </>
-          )}
-          {!editing && !isAssistant && (
-            <>
-              <VSCodeButton
-                disabled={isLoading}
-                title={t("edit-message")}
-                appearance="icon"
-                onClick={handleToggleEditing}
-              >
-                <span className="codicon codicon-edit" />
-              </VSCodeButton>
-              <VSCodeButton
-                disabled={isLoading || conversationLength <= 2}
-                title={t("delete-message")}
-                appearance="icon"
-                onClick={handleDelete}
-              >
-                <span className="codicon codicon-trash" />
-              </VSCodeButton>
-            </>
-          )}
-          {!editing && isAssistant && (
-            <VSCodeButton
-              disabled={isLoading}
-              title={t("regenerate-message")}
-              appearance="icon"
-              onClick={handleRegenerate}
-            >
-              <span className="codicon codicon-sync" />
-            </VSCodeButton>
-          )}
-        </div>
+        {!footerActions && options}
       </div>
       {message.role === ASSISTANT && (
-        <WorkspaceContext report={message.context ?? context} />
+        <>
+          <WorkspaceContext report={message.context ?? context} />
+          {editing && <ToolSteps steps={message.toolSteps ?? steps} />}
+        </>
       )}
       {editing ? (
         <EditorContent className={styles.tiptap} editor={editor} />
       ) : message.role === ASSISTANT ? (
         <>
-          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {messageContent.trimStart()}
-          </Markdown>
+          {replyParts(messageContent, message.toolSteps ?? steps).map((part, i) =>
+            "steps" in part ? (
+              <ToolSteps key={i} steps={part.steps} />
+            ) : part.text.trim() ? (
+              <Markdown key={i} remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                {part.text.trim()}
+              </Markdown>
+            ) : null
+          )}
           {renderImageGallery()}
-          {message.meta && <ReplyFooter meta={message.meta} onContinue={onContinue} />}
+          {message.changes && (
+            <ReplyChanges
+              changes={message.changes}
+              onUpdate={(changes) => index !== undefined && onChangesUpdate?.(index, changes)}
+              onError={showToast}
+            />
+          )}
+          {message.meta && <ReplyFooter meta={message.meta} onContinue={onContinue} actions={footerActions ? options : undefined} />}
         </>
       ) : (
         <Collapsible>

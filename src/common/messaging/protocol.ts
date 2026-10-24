@@ -32,7 +32,9 @@ import type {
   LanguageType,
   MentionType,
   ModelCatalogue,
+  ReplyChangesView,
   ThemeType,
+  ToolStepView,
   TwinnyProvider
 } from "../types"
 
@@ -59,6 +61,12 @@ export interface FileLocation {
 export interface ContextValue<T = unknown> {
   key: string
   value: T
+}
+
+/** A turn of the conversation as the composer's suggestions are shown it. */
+export interface ComposerTurn {
+  role: string
+  content: string
 }
 
 export interface ChatRequest {
@@ -89,8 +97,18 @@ export interface ProviderTestResult {
 /** Models a provider's endpoint says it serves. */
 export interface ProviderModelList {
   models: string[]
+  /** Optional human-facing names keyed by the callable model id. */
+  labels?: Record<string, string>
   /** Set when the endpoint could not be listed; `models` is then empty. */
   error?: string
+}
+
+export interface ChatGPTPlanStatus {
+  connected: boolean
+  sharing: boolean
+  email?: string
+  name?: string
+  clientId?: string
 }
 
 /** Reply to add/update: either the stored provider or the field errors. */
@@ -303,6 +321,11 @@ export interface ClientEvents {
   [EVENT_NAME.twinnyAcceptSolution]: Channel<string>
   [EVENT_NAME.twinnyChatMessage]: Channel<ChatRequest>
   [EVENT_NAME.twinnyClickSuggestion]: Channel<string>
+  /**
+   * The rest of the message being typed, as the chat model guesses it from
+   * the last few turns; empty when it has no good guess.
+   */
+  [EVENT_NAME.twinnyComposerSuggest]: Channel<{ draft: string; recent: ComposerTurn[] }, string>
   [EVENT_NAME.twinnyEditDefaultTemplates]: Channel
   [EVENT_NAME.twinnyFileListRequest]: Channel<void, string[]>
   [EVENT_NAME.twinnyGetConfigValue]: Channel<{ key: string }, ConfigValue>
@@ -332,6 +355,29 @@ export interface ClientEvents {
   [EVENT_NAME.twinnyStopGeneration]: Channel
   [EVENT_NAME.twinnySymbolSearch]: Channel<{ query: string }, ContextItem[]>
   [EVENT_NAME.twinnyTextSelection]: Channel<void, string>
+  /**
+   * The user's answer to a command waiting in the tool steps; `always`
+   * runs that same command without asking from then on.
+   */
+  [EVENT_NAME.twinnyToolApproval]: Channel<{ id: string; run: boolean; always?: boolean }>
+  /** Stop the command a running tool step is waiting on, and only that. */
+  [EVENT_NAME.twinnyToolStop]: Channel<{ id: string }>
+  /**
+   * A message queued while an agent reply works, offered for the model to
+   * read at its next step; without `text`, the offer is taken back. One
+   * the model reads comes back as a `said` tool step with the id
+   * `said.<id>`; one it never reached stays queued.
+   */
+  [EVENT_NAME.twinnySteer]: Channel<{ id: string; text?: string }>
+  /** The agent's settings in VS Code's settings editor. */
+  [EVENT_NAME.twinnyOpenAgentSettings]: Channel
+  /** A file an agent reply changed, beside what it was before the reply. */
+  [EVENT_NAME.twinnyOpenChange]: Channel<{ id: string; path: string }>
+  /**
+   * Put an agent reply's changed files (all, or `paths`) back as they
+   * were; answers with the changes as they then stand, or why not.
+   */
+  [EVENT_NAME.twinnyUndoChanges]: Channel<{ id: string; paths?: string[] }, { view?: ReplyChangesView; error?: string }>
 
   [CONVERSATION_EVENT_NAME.clearAllConversations]: Channel
   [CONVERSATION_EVENT_NAME.getActiveConversation]: Channel
@@ -349,6 +395,9 @@ export interface ClientEvents {
   [EMBEDDING_EVENT_NAME.getStatus]: Channel<void, EmbeddingStatus>
 
   [PROVIDER_EVENT_NAME.addProvider]: Channel<TwinnyProvider, ProviderSaveResult>
+  [PROVIDER_EVENT_NAME.getChatGPTPlanStatus]: Channel<void, ChatGPTPlanStatus>
+  [PROVIDER_EVENT_NAME.signInChatGPTPlan]: Channel<void, ChatGPTPlanStatus>
+  [PROVIDER_EVENT_NAME.signOutChatGPTPlan]: Channel<void, ChatGPTPlanStatus>
   [PROVIDER_EVENT_NAME.previewTeam]: Channel<TeamConnectionRequest, TeamPreview>
   [PROVIDER_EVENT_NAME.applyTeam]: Channel<TeamApplyRequest, TeamApplyResult>
   [PROVIDER_EVENT_NAME.cancelTeam]: Channel
@@ -425,6 +474,7 @@ export interface ServerEvents {
   [EVENT_NAME.twinnyListTemplates]: string[]
   [EVENT_NAME.twinnyNewConversation]: void
   [EVENT_NAME.twinnyExportConversation]: void
+  [EVENT_NAME.twinnyShowShortcuts]: void
   [EVENT_NAME.twinnyOnCompletion]: ChatCompletionMessage
   [EVENT_NAME.twinnyOnLoading]: void
   [EVENT_NAME.twinnySendLanguage]: LanguageType
@@ -437,6 +487,8 @@ export interface ServerEvents {
   [EVENT_NAME.twinnyTextSelection]: string
   [EVENT_NAME.twinnyUpdateContextItems]: AnyContextItem[]
   [EVENT_NAME.twinnyWorkspaceSearch]: WorkspaceSearchReport
+  /** The tool steps of the reply being written, whole, each time one changes. */
+  [EVENT_NAME.twinnyToolSteps]: ToolStepView[]
 
   [CONVERSATION_EVENT_NAME.getConversations]: Record<string, Conversation>
   [CONVERSATION_EVENT_NAME.setActiveConversation]: Conversation | undefined

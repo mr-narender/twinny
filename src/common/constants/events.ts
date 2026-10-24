@@ -11,6 +11,7 @@ export const EVENT_NAME = {
   twinnyAddMessage: "twinny-add-message",
   twinnyChatMessage: "twinny-chat-message",
   twinnyClickSuggestion: "twinny-click-suggestion",
+  twinnyComposerSuggest: "twinny-composer-suggest",
   twinnyEditDefaultTemplates: "twinny-edit-default-templates",
   twinnyFileListRequest: "twinny-file-list-request",
   twinnyGetConfigValue: "twinny-get-config-value",
@@ -32,6 +33,7 @@ export const EVENT_NAME = {
   twinnyRunInTerminal: "twinny-run-in-terminal",
   twinnyInsertAtCursor: "twinny-insert-at-cursor",
   twinnyExportConversation: "twinny-export-conversation",
+  twinnyShowShortcuts: "twinny-show-shortcuts",
   twinnySendLanguage: "twinny-send-language",
   twinnySendLoader: "twinny-send-loader",
   twinnySendTheme: "twinny-send-theme",
@@ -46,6 +48,13 @@ export const EVENT_NAME = {
   twinnyStopGeneration: "twinny-stop-generation",
   twinnySymbolSearch: "twinny-symbol-search",
   twinnyTextSelection: "twinny-text-selection",
+  twinnyToolApproval: "twinny-tool-approval",
+  twinnyToolStop: "twinny-tool-stop",
+  twinnySteer: "twinny-steer",
+  twinnyOpenChange: "twinny-open-change",
+  twinnyUndoChanges: "twinny-undo-changes",
+  twinnyOpenAgentSettings: "twinny-open-agent-settings",
+  twinnyToolSteps: "twinny-tool-steps",
   twinnyUpdateContextItems: "twinny-update-context-items",
   twinnyWorkspaceSearch: "twinny-workspace-search"
 } as const
@@ -70,6 +79,9 @@ export const EMBEDDING_EVENT_NAME = {
 
 export const PROVIDER_EVENT_NAME = {
   addProvider: "twinny.add-provider",
+  getChatGPTPlanStatus: "twinny.get-chatgpt-plan-status",
+  signInChatGPTPlan: "twinny.sign-in-chatgpt-plan",
+  signOutChatGPTPlan: "twinny.sign-out-chatgpt-plan",
   previewTeam: "twinny.preview-team",
   applyTeam: "twinny.apply-team",
   cancelTeam: "twinny.cancel-team",
