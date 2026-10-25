@@ -8,7 +8,7 @@
  * nothing else.
  */
 import type { ShieldReport } from "../../common/secret-shield"
-import { ChatCompletionMessage } from "../../common/types"
+import { ChatCompletionMessage, FimContextFile } from "../../common/types"
 
 export type InferenceCapability = "fim" | "chat" | "embeddings"
 
@@ -52,6 +52,15 @@ export interface InferenceOptions {
   onShield?(report: ShieldReport[]): void
 }
 
+export interface FimStructuredContext {
+  language?: string
+  fileName?: string
+  repoName?: string
+  prefix: string
+  suffix: string
+  files?: FimContextFile[]
+}
+
 export interface FimRequest {
   model: string
   /** The hole as the model expects it: prefix, suffix and template applied. */
@@ -59,6 +68,11 @@ export interface FimRequest {
   /** The raw sides of the hole, for providers with a native FIM endpoint. */
   prefix?: string
   suffix?: string
+  /**
+   * Provider-neutral context for instruction models that should not receive
+   * provider-specific FIM marker dialects.
+   */
+  context?: FimStructuredContext
   stop?: string[]
   /** Cap on generated tokens. Unset or negative means the server's default. */
   maxTokens?: number
@@ -94,9 +108,28 @@ export interface FimChunk {
  */
 export type ChatMessage = ChatCompletionMessage
 
+/** A tool the model may call, described by a JSON schema for its arguments. */
+export interface ChatToolDefinition {
+  name: string
+  description: string
+  parameters: Record<string, unknown>
+}
+
+/** A call the model made natively: `arguments` is the JSON text it wrote. */
+export interface ChatToolCall {
+  id: string
+  name: string
+  arguments: string
+}
+
 export interface ChatRequest {
   model: string
   messages: ChatMessage[]
+  /**
+   * Tools offered through the server's own tool-calling, on providers that
+   * have it (OpenAI-compatible routes). Calls come back as `toolCalls`.
+   */
+  tools?: ChatToolDefinition[]
   maxTokens?: number
   temperature?: number
   /**
@@ -104,6 +137,13 @@ export interface ChatRequest {
    * backends that take the request (Ollama). Others ignore it.
    */
   think?: boolean
+  /**
+   * How long a reasoning model may think before answering, on OpenAI.
+   * Its chat route streams nothing while it thinks, so a tool loop asks
+   * for `low` to keep each step to seconds. Models that do not reason
+   * refuse the parameter.
+   */
+  reasoningEffort?: "low" | "medium" | "high"
 }
 
 /**
@@ -120,6 +160,8 @@ export interface ChatChunk {
   reasoning?: string
   /** On the last chunk, from backends that say why they stopped. */
   finishReason?: ChatFinishReason
+  /** The model's tool calls, whole, once the reply that made them has ended. */
+  toolCalls?: ChatToolCall[]
 }
 
 export interface EmbeddingRequest {

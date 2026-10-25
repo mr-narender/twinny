@@ -51,6 +51,9 @@ const CHAT_ONLY_PROVIDERS: string[] = [
 export const isHostedProvider = (provider: string) =>
   HOSTED_PROVIDERS.includes(provider)
 
+export const isChatGPTPlanProvider = (provider: string) =>
+  provider === API_PROVIDERS.ChatGPTPlan
+
 export const isOpenAICompatibleProvider = (provider: string) =>
   (Object.values(OPEN_AI_COMPATIBLE_PROVIDERS) as string[]).includes(provider)
 
@@ -77,7 +80,8 @@ export const isRemoteProvider = (provider: string) =>
  * else is a raw HTTP request to the address the user gives.
  */
 export const usesEndpoint = (provider: string, type: string) =>
-  type !== "chat" || !isHostedProvider(provider)
+  !isChatGPTPlanProvider(provider) &&
+  (type !== "chat" || !isHostedProvider(provider))
 
 /** Whether the person configures the hostname / port / path themselves. */
 export const hasConfigurableEndpoint = (provider: string, type: string) =>
@@ -87,7 +91,9 @@ export const expectsApiKey = (provider: string) =>
   KEY_REQUIRED_PROVIDERS.includes(provider)
 
 export const supportsType = (provider: string, type: string) =>
-  type === "chat" || !CHAT_ONLY_PROVIDERS.includes(provider)
+  isChatGPTPlanProvider(provider)
+    ? type === "chat" || type === "fim"
+    : type === "chat" || !CHAT_ONLY_PROVIDERS.includes(provider)
 
 export interface EndpointDefaults {
   apiHostname?: string
@@ -149,6 +155,9 @@ const ENDPOINT_DEFAULTS: Record<
     chat: { apiHostname: "api.deepseek.com", apiProtocol: "https", apiPath: "/v1" },
     fim: { apiHostname: "api.deepseek.com", apiProtocol: "https", apiPath: "/beta/completions" }
   },
+  [API_PROVIDERS.DemonRoute]: {
+    chat: { apiHostname: "api.demonroute.com", apiProtocol: "https", apiPath: "/v1" }
+  },
   [API_PROVIDERS.OpenRouter]: {
     fim: { apiHostname: "openrouter.ai", apiProtocol: "https", apiPath: "/api/v1/completions" }
   },
@@ -177,6 +186,25 @@ export const getEndpointDefaults = (
 
 const trim = (value: unknown) =>
   typeof value === "string" ? value.trim() : ""
+
+const REASONING_EFFORTS = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max"
+] as const
+
+const reasoningEffort = (
+  value: unknown
+): TwinnyProvider["reasoningEffort"] =>
+  REASONING_EFFORTS.includes(
+    trim(value) as (typeof REASONING_EFFORTS)[number]
+  )
+    ? (trim(value) as TwinnyProvider["reasoningEffort"])
+    : undefined
 
 /** Junk stays NaN rather than vanishing, so validation can point at it. */
 const parsePort = (value: unknown): number | undefined => {
@@ -264,6 +292,19 @@ export const normalizeProvider = (input: TwinnyProvider): TwinnyProvider => {
     normalized.apiKey = ""
   }
 
+  if (isChatGPTPlanProvider(providerName)) {
+    // This provider is a fixed OpenAI service authenticated through
+    // Sign in with ChatGPT. Endpoint and bearer credentials never belong
+    // in exported TwinnyProvider configuration.
+    normalized.apiHostname = ""
+    normalized.apiPort = undefined
+    normalized.apiPath = ""
+    normalized.apiKey = ""
+    normalized.apiProtocol = "https"
+    normalized.fimTemplate = undefined
+    normalized.reasoningEffort = reasoningEffort(input.reasoningEffort)
+  }
+
   return normalized
 }
 
@@ -309,7 +350,7 @@ export const validateProvider = (
   if (!knownProviders.includes(providerName)) {
     errors.provider = `Unknown provider "${providerName}".`
   } else if (!supportsType(providerName, type)) {
-    errors.provider = `${providerName} only supports chat in twinny. For ${type} use a local server, OpenRouter, DeepSeek or Mistral.`
+    errors.provider = `${providerName} does not support ${type} in twinny.`
   }
 
   if (

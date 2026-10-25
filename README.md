@@ -4,7 +4,7 @@ The AI coding assistant for Visual Studio Code that stays inside your network. C
 
 [Install from the Marketplace](https://marketplace.visualstudio.com/items?itemName=rjmacarthy.twinny) · [Documentation](https://docs.twinny.dev/) · [What's new](https://docs.twinny.dev/reference/whats-new/) · [Changelog](CHANGELOG.md) · [Teams](https://docs.twinny.dev/teams/overview/) · [中文](README.zh-CN.md) · [Português (BR)](README.pt-BR.md)
 
-**For teams:** one gateway on your network serves every developer's VS Code, with a key per person, usage, policy and an admin page. `npx twinny-server quickstart` sets it up. Free for five developers, $6 a seat a month after that, and a [30-day trial](https://twinny.dev/#trial) with no card. Details, prices and a live admin page at [twinny.dev](https://twinny.dev/#teams).
+**For teams:** one gateway on your network serves every developer's VS Code, with a key per person, usage, policy and an admin page. `npx twinny-server quickstart` sets it up. Free for five developers, $15 a seat a month after that, and a [30-day trial](https://twinny.dev/#trial) with no card. Details, prices and a live admin page at [twinny.dev](https://twinny.dev/#teams).
 
 ## Getting started
 
@@ -19,6 +19,7 @@ The [quick start](https://docs.twinny.dev/getting-started/quick-start/) covers p
 - **[Code completion](https://docs.twinny.dev/features/code-completion/).** Fill-in-the-middle suggestions as you type, streamed as ghost text and stopped at a sensible end. Context comes from open files, imports, the language server and your recent edits. Tuned to work well with a 7B model.
 - **[Inline edit](https://docs.twinny.dev/features/inline-edit/).** Ctrl+I, describe a change, and review it as a diff in the editor. Accept or reject per hunk. *Fix with twinny* on any diagnostic.
 - **[Chat](https://docs.twinny.dev/features/chat/)** with your code. Type `@` to attach files, symbols, the problems panel, the git diff, the terminal, or a search of the workspace index. Conversations are kept.
+- **[Agent mode](https://docs.twinny.dev/features/agent-mode/)** (experimental). A switch in the chat, or Shift+Tab, lets the model read, search and edit files and run commands in the workspace, each step shown in the reply. Commands ask first unless you say otherwise.
 - **[Workspace index](https://docs.twinny.dev/features/workspace-index/).** Hybrid keyword and vector search over the workspace, reranked before it reaches the prompt, updated on save. Sources show under replies.
 - **[Code review](https://docs.twinny.dev/features/code-review/)** of the working tree, a branch against its base, or a GitHub pull request, and **[commit messages](https://docs.twinny.dev/features/commit-messages/)** from the staged diff.
 - **[Terminal](https://docs.twinny.dev/features/terminal/).** Write a command from a description, shown before it runs. When one fails, twinny finds the file and line and offers the fix.

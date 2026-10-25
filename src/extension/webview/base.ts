@@ -149,9 +149,14 @@ export class BaseProvider {
     const providerManager = new ProviderManager(this.context, bridge, {
       teamChanged: async () => {
         await Promise.all([teamShare?.teamChanged(), teamPlugins?.teamChanged()])
+      },
+      chatGPTPlanSigningOut: () => {
+        this._generations.stopAll()
+        this.chat?.abortAll()
       }
     })
     this.providers = providerManager
+    this.chat.refreshTeamPolicy = () => providerManager.refreshTeamPolicy()
     if (this._p2p) {
       this._p2pBridge = new P2pBridge(this._p2p, bridge, providerManager)
     }
@@ -190,6 +195,8 @@ export class BaseProvider {
           TWINNY_COMMAND_NAME.templateCompletion,
           template
         ),
+      [EVENT_NAME.twinnyComposerSuggest]: async ({ draft, recent }) =>
+        (await this.chat?.suggestDraft(draft, recent)) ?? "",
       [EVENT_NAME.twinnyEditDefaultTemplates]: () => this.editDefaultTemplates(),
       [EVENT_NAME.twinnyFileListRequest]: () =>
         this._fileTreeProvider.getAllFiles(),
@@ -239,6 +246,14 @@ export class BaseProvider {
           .update(key, value, vscode.ConfigurationTarget.Global),
       [EVENT_NAME.twinnySidebarReady]: () => this._sidebarReadyHandler?.(),
       [EVENT_NAME.twinnyStopGeneration]: () => this.destroyStream(),
+      [EVENT_NAME.twinnyToolApproval]: ({ id, run, always }) => this.chat?.answerToolApproval(id, run, always),
+      [EVENT_NAME.twinnyToolStop]: ({ id }) => this.chat?.stopToolStep(id),
+      [EVENT_NAME.twinnySteer]: ({ id, text }) => this.chat?.steer(id, text),
+      [EVENT_NAME.twinnyOpenChange]: ({ id, path }) => void this.chat?.openChange(id, path),
+      [EVENT_NAME.twinnyOpenAgentSettings]: () =>
+        void vscode.commands.executeCommand("workbench.action.openSettings", "twinny.chatTools"),
+      [EVENT_NAME.twinnyUndoChanges]: async ({ id, paths }) =>
+        (await this.chat?.undoChanges(id, paths)) ?? { error: "The chat is not ready." },
       [EVENT_NAME.twinnySymbolSearch]: ({ query }) => searchSymbols(query),
       [EVENT_NAME.twinnyTextSelection]: () => getTextSelection()
     })
@@ -256,7 +271,8 @@ export class BaseProvider {
         )
       }),
       vscode.workspace.onDidChangeConfiguration((event) => {
-        if (!event.affectsConfiguration("twinny")) return
+        // A new locale remounts the whole webview, so only a change to it is sent.
+        if (!event.affectsConfiguration("twinny.locale")) return
         bridge.emit(EVENT_NAME.twinnySetLocale, this.getLocale())
       })
     )
@@ -375,6 +391,9 @@ export class BaseProvider {
     this.conversationHistory?.resetConversation()
     this.chat?.resetConversation()
     this.bridge?.emit(EVENT_NAME.twinnyNewConversation)
+    // A reply still being written belongs to the conversation left; the
+    // chat has cleared what it queued there before the reply stops.
+    this.chat?.discardReply()
   }
 
   private createNewUntitledDocument = async ({

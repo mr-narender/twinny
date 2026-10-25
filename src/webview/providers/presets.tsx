@@ -119,6 +119,12 @@ export const PRESETS: ProviderPreset[] = [
   local(API_PROVIDERS.LiteLLM, "chat"),
   local(API_PROVIDERS.Oobabooga, "chat"),
   gateway("chat"),
+  hosted(
+    API_PROVIDERS.ChatGPTPlan,
+    "ChatGPT Plan",
+    <SvgOpenAI />,
+    ""
+  ),
   hosted(API_PROVIDERS.OpenAI, "OpenAI", <SvgOpenAI />, "gpt-4.1"),
   hosted(
     API_PROVIDERS.Anthropic,
@@ -131,6 +137,13 @@ export const PRESETS: ProviderPreset[] = [
   hosted(API_PROVIDERS.Groq, "Groq", <SvgGroq />, "llama-3.3-70b-versatile"),
   hosted(API_PROVIDERS.Mistral, "Mistral", <SvgMistral />, "mistral-small-latest"),
   hosted(API_PROVIDERS.OpenRouter, "OpenRouter", <SvgOpenRouter />, "openai/gpt-4.1"),
+  hosted(
+    API_PROVIDERS.DemonRoute,
+    "DemonRoute",
+    codicon("plug"),
+    "shoukewei/Qwen3.8-27B-OBLITERATED22-AGENT",
+    "chat"
+  ),
   hosted(API_PROVIDERS.Cohere, "Cohere", <SvgCohere />, "command-r-plus"),
   hosted(
     API_PROVIDERS.Perplexity,
@@ -144,6 +157,13 @@ export const PRESETS: ProviderPreset[] = [
   local(API_PROVIDERS.LlamaCpp, "fim", "", FIM_TEMPLATE_FORMAT.automatic),
   local(API_PROVIDERS.OpenAICompatible, "fim", "", FIM_TEMPLATE_FORMAT.automatic),
   gateway("fim"),
+  hosted(
+    API_PROVIDERS.ChatGPTPlan,
+    "ChatGPT Plan",
+    <SvgOpenAI />,
+    "",
+    "fim"
+  ),
   hosted(
     API_PROVIDERS.Mistral,
     "Codestral",
