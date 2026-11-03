@@ -1,6 +1,7 @@
 export const OPEN_AI_COMPATIBLE_PROVIDERS = {
   LiteLLM: "litellm",
   Deepseek: "deepseek",
+  DemonRoute: "demonroute",
   LMStudio: "lmstudio",
   Oobabooga: "oobabooga",
   OpenWebUI: "openwebui",
@@ -15,6 +16,7 @@ export const OPEN_AI_COMPATIBLE_PROVIDERS = {
 export const API_PROVIDERS = {
   Anthropic: "anthropic",
   OpenAI: "openai",
+  ChatGPTPlan: "openai-chatgpt-plan",
   Mistral: "mistral",
   Groq: "groq",
   OpenRouter: "openrouter",
@@ -34,6 +36,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   [API_PROVIDERS.Anthropic]: "Anthropic",
   [API_PROVIDERS.Cohere]: "Cohere",
   [API_PROVIDERS.Deepseek]: "DeepSeek",
+  [API_PROVIDERS.DemonRoute]: "DemonRoute",
   [API_PROVIDERS.Gemini]: "Gemini",
   [API_PROVIDERS.Groq]: "Groq",
   [API_PROVIDERS.LiteLLM]: "LiteLLM",
@@ -43,13 +46,14 @@ export const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   [API_PROVIDERS.Ollama]: "Ollama",
   [API_PROVIDERS.Oobabooga]: "Oobabooga",
   [API_PROVIDERS.OpenAI]: "OpenAI",
+  [API_PROVIDERS.ChatGPTPlan]: "ChatGPT Plan",
   [API_PROVIDERS.OpenAICompatible]: "OpenAI-compatible server",
   [API_PROVIDERS.OpenRouter]: "OpenRouter",
   [API_PROVIDERS.OpenWebUI]: "Open WebUI",
   [API_PROVIDERS.Perplexity]: "Perplexity",
   [API_PROVIDERS.Qvac]: "QVAC",
-  [API_PROVIDERS.TwinnyP2P]: "Twinny device (P2P)",
-  [API_PROVIDERS.TwinnyRemote]: "Twinny gateway"
+  [API_PROVIDERS.TwinnyP2P]: "twinny device (P2P)",
+  [API_PROVIDERS.TwinnyRemote]: "twinny gateway"
 }
 
 /**
