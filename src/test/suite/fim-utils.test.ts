@@ -124,6 +124,36 @@ suite("FIM utilities", () => {
       })
     })
 
+    test("uses top-level completion fields for OpenAI-compatible FIM", () => {
+      const body = createStreamRequestBodyFim(API_PROVIDERS.OpenAICompatible, "p", options)
+      assert.deepStrictEqual(body, {
+        model: "m",
+        prompt: "p",
+        stream: true,
+        temperature: 0.1,
+        max_tokens: 128,
+        stop: options.stop
+      })
+      assert.strictEqual("options" in body, false)
+      assert.strictEqual("keep_alive" in body, false)
+      assert.strictEqual(options.stop.length, 5)
+    })
+
+    test("omits unlimited budgets and empty stops from OpenAI-compatible JSON", () => {
+      const body = createStreamRequestBodyFim(API_PROVIDERS.OpenAICompatible, "p", {
+        ...options,
+        numPredictFim: -1,
+        stop: [],
+        messages: [{ role: "user", content: "p" }]
+      })
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(body)), {
+        model: "m",
+        prompt: "p",
+        stream: true,
+        temperature: 0.1
+      })
+    })
+
     test("Mistral's completion endpoint gets the model in the body, like the other hosted APIs", () => {
       const body = createStreamRequestBodyFim(API_PROVIDERS.Mistral, "p", options)
       assert.deepStrictEqual(body, {
@@ -134,6 +164,20 @@ suite("FIM utilities", () => {
         max_tokens: 128,
         stop: ["<a>", "<b>", "<c>", "<d>"]
       })
+    })
+
+    test("names the model for llama.cpp, whose router mode refuses a request without one", () => {
+      const body = createStreamRequestBodyFim(API_PROVIDERS.LlamaCpp, "p", options)
+      assert.deepStrictEqual(body, {
+        model: "m",
+        prompt: "p",
+        stream: true,
+        temperature: 0.1,
+        max_tokens: 128,
+        stop: options.stop
+      })
+      const unnamed = createStreamRequestBodyFim(API_PROVIDERS.LlamaCpp, "p", { ...options, model: "" })
+      assert.strictEqual("model" in unnamed, false)
     })
 
     test("caps stop sequences for hosted OpenAI-style APIs", () => {
