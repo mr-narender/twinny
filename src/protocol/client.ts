@@ -23,6 +23,7 @@ import {
 } from "../extension/inference/types"
 
 import {
+  AGENT_RULES_HEADER,
   REMOTE_JOIN_PATH,
   REMOTE_PAGE_LINK_PATH,
   REMOTE_PROTOCOL_BASE,
@@ -196,13 +197,29 @@ export class RemoteInferenceProvider implements InferenceProvider {
   }
 
   public fim(request: FimRequest, options?: InferenceOptions) {
-    return this.stream<FimChunk>("fim", request, options)
+    // Structured context is for adapters that consume it directly. The
+    // traditional gateway request already carries that context rendered in
+    // prompt, and older gateways correctly reject unknown wire fields.
+    const wireRequest = { ...request }
+    delete wireRequest.context
+    return this.stream<FimChunk>("fim", wireRequest, options)
   }
 
   public chat(request: ChatRequest, options?: InferenceOptions) {
-    // The protocol carries a conversation as roles and content; anything
-    // the extension keeps on a message for itself stays here.
-    const messages = request.messages.map(({ role, content }) => ({ role, content }))
+    // The protocol carries a conversation as roles and content, plus what
+    // a tool conversation needs: the calls an assistant turn made and the
+    // call a result answers. Anything else the extension keeps on a
+    // message for itself stays here.
+    const messages = request.messages.map((message) => {
+      const { role, content } = message
+      const { tool_calls, tool_call_id } = message as { tool_calls?: unknown[]; tool_call_id?: string }
+      return {
+        role,
+        content,
+        ...(role === "assistant" && tool_calls?.length ? { tool_calls } : {}),
+        ...((role as string) === "tool" && tool_call_id ? { tool_call_id } : {})
+      }
+    })
     return this.stream<ChatChunk>("chat", { ...request, messages }, options)
   }
 
@@ -230,6 +247,8 @@ export class RemoteInferenceProvider implements InferenceProvider {
       Accept: "application/json, application/x-ndjson",
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // This client holds its agent to the team's rules.
+      [AGENT_RULES_HEADER]: "1",
       ...(this._workspace() ? { "X-Twinny-Workspace": String(this._workspace()).slice(0, 200) } : {})
     }
   }

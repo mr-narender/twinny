@@ -17,6 +17,7 @@
 - **[代码补全](https://docs.twinny.dev/zh-cn/features/code-completion/)。** 输入时的中间填充建议，以幽灵文本流式显示，在合理处停止。上下文来自打开的文件、导入、语言服务器和你最近的编辑。针对 7B 模型调优。
 - **[内联编辑](https://docs.twinny.dev/zh-cn/features/inline-edit/)。** 按 Ctrl+I，描述改动，在编辑器中以差异形式审阅。按块接受或拒绝。任何诊断上都有"用 twinny 修复"。
 - **[对话](https://docs.twinny.dev/zh-cn/features/chat/)。** 输入 `@` 附加文件、符号、问题面板、git 差异、终端，或工作区索引的搜索结果。对话会被保存。
+- **[智能体模式](https://docs.twinny.dev/zh-cn/features/agent-mode/)**（实验性）。对话中的开关或 Shift+Tab 让模型在工作区中读取、搜索、编辑文件并运行命令，每一步都显示在回答中。除非你另行设置，运行命令前会先询问。
 - **[工作区索引](https://docs.twinny.dev/zh-cn/features/workspace-index/)。** 对工作区的关键词与向量混合搜索，进入提示词前重排，保存时更新。回复下方显示来源。
 - **[代码审查](https://docs.twinny.dev/zh-cn/features/code-review/)**：审查工作树、分支相对基线的改动，或 GitHub 拉取请求；**[提交信息](https://docs.twinny.dev/zh-cn/features/commit-messages/)**由暂存的差异生成。
 - **[终端](https://docs.twinny.dev/zh-cn/features/terminal/)。** 用一句描述写出命令，运行前先展示。命令失败时，twinny 找到文件和行号并给出修复。
@@ -52,7 +53,7 @@ npx twinny-server quickstart
 - **请求记录**（需许可证）：把提示词和回复保存在网关上，向每位开发者披露，可导出为训练数据。
 - **运维**：每次管理变更都写入哈希链式审计日志、只读管理员密钥、Prometheus 指标、模型设有价格时按开发者统计成本、共享 GPU 的请求队列、Docker 和 Helm chart。
 
-五位开发者以内永久免费。刷卡购买的许可证增加席位并开启策略、记录和插件；在本地校验，网关从不回连。见[团队指南](https://docs.twinny.dev/teams/overview/)、[许可与席位](https://docs.twinny.dev/teams/licensing/)，以及 [docs/gateway.md](docs/gateway.md) 中的运维参考。
+五位开发者以内永久免费。刷卡购买的许可证增加席位并开启策略、记录和插件；在本地校验，网关从不回连。个人开发者可一次性 $29 购买 **Personal**：在自己的网关上永久使用同样的功能。见[团队指南](https://docs.twinny.dev/teams/overview/)、[许可与席位](https://docs.twinny.dev/teams/licensing/)，以及 [docs/gateway.md](docs/gateway.md) 中的运维参考。
 
 ## 仓库结构
 
@@ -73,7 +74,7 @@ npx twinny-server quickstart
 
 ## 支持 twinny
 
-twinny 免费且开源。如果它对你有用，购买团队许可证是最好的支持方式。也欢迎捐赠。比特币：`1PVavNkMmBmUz8nRYdnVXiTgXrAyaxfehj`
+twinny 免费且开源。如果它对你有用，[购买许可证](https://twinny.dev/#pricing)是最好的支持方式：Personal 一次性 $29。
 
 ## 许可证
 

@@ -1,25 +1,44 @@
 /*
- * twinny — terminal
+ * twinny
  *
  * One token layer for the whole webview. Everything else consumes these; if a
  * colour or a size needs tuning it should only need tuning here.
  *
  * The palette is derived from the user's VS Code theme rather than hard-coded,
  * so a light theme stays readable. The look comes from the shape of things —
- * monospace, hairlines, square corners, no shadows — not from a fixed colour.
+ * soft filled surfaces, rounded corners, room to breathe, greys — not from a
+ * fixed colour. Things are set apart by a ground a shade off the page, not
+ * by a line drawn round them.
+ *
+ * Two faces: VS Code's own UI font for everything people read (replies,
+ * labels, buttons, settings), and the editor's font for what is code — code
+ * blocks, inline `code`, paths, commands, model names, tool arguments — so it
+ * stands apart from the prose around it.
  */
 
 :root {
-  --tw-font: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace);
+  --tw-font: var(--vscode-font-family, system-ui, -apple-system, "Segoe UI", Ubuntu, "Helvetica Neue", sans-serif);
+  --tw-mono: var(--vscode-editor-font-family, ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace);
 
-  --tw-fs: 12px;
-  --tw-fs-sm: 11px;
-  --tw-fs-xs: 10px;
-  --tw-lh: 1.65;
-  --tw-track: 0.08em;
+  --tw-fs: 13px;
+  --tw-fs-sm: 12px;
+  --tw-fs-xs: 11px;
+  /* Monospace runs large beside the UI font; code is set a step down to match. */
+  --tw-fs-mono: 12px;
+  /* Code in a line of record (tool steps, their output, diffs): a step under the code in a reply. */
+  --tw-fs-mono-sm: 11px;
+  --tw-lh: 1.55;
+  /* Letter-spacing is for capitals only: lowercase text keeps the font's own. */
+  --tw-track: 0;
+  --tw-track-caps: 0.06em;
 
   --tw-pad: 12px;
   --tw-gutter: 14px;
+
+  /* Corners: controls, cards, and the large blocks (the composer, a user's turn). */
+  --tw-radius-sm: 4px;
+  --tw-radius: 6px;
+  --tw-radius-lg: 10px;
 
   --tw-bg: var(--vscode-editor-background);
   --tw-fg: var(--vscode-foreground);
@@ -30,6 +49,9 @@
   --tw-rule: var(--vscode-editorWidget-border);
   --tw-rule-soft: var(--vscode-editorWidget-border);
   --tw-surface: var(--vscode-editorWidget-background);
+  /* Grounds for things that stand apart: a card, and one a step stronger (hover, a user's turn). */
+  --tw-fill: var(--vscode-editorWidget-background);
+  --tw-fill-strong: var(--vscode-list-hoverBackground);
   /*
    * No invented palette. Each of these is the token VS Code itself uses for
    * that exact job, so every colour in the UI is one the active theme already
@@ -41,7 +63,13 @@
    * reliably override (verified against the built-in themes); textLink is a
    * VS Code constant, so it is used only for real hyperlinks.
    */
+  /* Focus rings only: every state and indicator is drawn in --tw-mark, a grey. */
   --tw-accent: var(--vscode-focusBorder);
+  --tw-mark: var(--vscode-foreground);
+  /* A primary action is the foreground, inverted: the strongest grey there is. */
+  --tw-primary-bg: var(--vscode-foreground);
+  --tw-primary-fg: var(--vscode-editor-background);
+  --tw-primary-hover: var(--vscode-foreground);
   --tw-link: var(--vscode-textLink-foreground, var(--vscode-focusBorder));
   --tw-code: var(--vscode-textPreformat-foreground, var(--vscode-foreground));
   --tw-cursor: var(--vscode-editorCursor-foreground, var(--vscode-foreground));
@@ -55,8 +83,11 @@
     --tw-rule: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
     --tw-rule-soft: color-mix(in srgb, var(--vscode-foreground) 7%, transparent);
     --tw-surface: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
+    --tw-fill: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+    --tw-fill-strong: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
     --tw-accent-soft: color-mix(in srgb, var(--tw-accent) 45%, transparent);
     --tw-link-soft: color-mix(in srgb, var(--tw-link) 40%, transparent);
+    --tw-primary-hover: color-mix(in srgb, var(--vscode-foreground) 82%, var(--vscode-editor-background));
   }
 }
 
@@ -82,7 +113,7 @@ body {
   color: var(--tw-fg);
 }
 
-/* Thin, square, unobtrusive. */
+/* Thin, rounded, unobtrusive. */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -95,7 +126,7 @@ body {
 
 ::-webkit-scrollbar-thumb {
   background: var(--tw-rule);
-  border-radius: 0;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -114,9 +145,8 @@ a:hover {
 }
 
 /*
- * The toolkit web components render their own rounded chrome. Square the
- * corners and put them on the same font as everything else; their colours and
- * weights are VS Code's own and are left alone.
+ * The toolkit web components get the same corners and font as everything
+ * else; their colours and weights are VS Code's own and are left alone.
  */
 vscode-button::part(control),
 vscode-dropdown::part(control),
@@ -125,8 +155,51 @@ vscode-text-field::part(control),
 vscode-text-area::part(control),
 vscode-badge::part(control),
 vscode-checkbox::part(control) {
-  border-radius: 0;
+  border-radius: var(--tw-radius-sm);
   font-family: var(--tw-font);
+}
+
+/* Code everywhere, outside a code block's own rules. */
+code,
+kbd,
+samp {
+  font-family: var(--tw-mono);
+  font-size: var(--tw-fs-mono);
+}
+
+/* The toolkit's buttons in the same greys as the rest: primary inverted, secondary a hairline. */
+vscode-button:not([appearance="secondary"]):not([appearance="icon"])::part(control) {
+  border: 1px solid var(--tw-primary-bg);
+  background: var(--tw-primary-bg);
+  color: var(--tw-primary-fg);
+}
+
+vscode-button:not([appearance="secondary"]):not([appearance="icon"]):hover::part(control) {
+  border-color: var(--tw-primary-hover);
+  background: var(--tw-primary-hover);
+}
+
+/*
+ * The toolkit paints a button's ground on the element itself as well as its
+ * part; left there, the theme's blue shows through a faded disabled button.
+ */
+vscode-button {
+  background: transparent;
+}
+
+vscode-button[appearance="secondary"]::part(control) {
+  border: 1px solid var(--tw-rule);
+  background: transparent;
+  color: var(--tw-fg);
+}
+
+vscode-button[appearance="secondary"]:hover,
+vscode-button[appearance="secondary"]:hover::part(control) {
+  background: var(--tw-surface);
+}
+
+vscode-button[disabled]::part(control) {
+  opacity: 0.45;
 }
 
 vscode-button[appearance="icon"]::part(control) {
@@ -172,14 +245,21 @@ vscode-button::part(content) {
   display: inline;
   padding: 0;
   border: 0;
-  border-bottom: 1px solid var(--tw-accent-soft);
+  border-bottom: 1px solid var(--tw-rule);
   border-radius: 0;
   background: transparent;
-  color: var(--tw-accent);
-  font-family: var(--tw-font);
-  font-size: inherit;
+  color: var(--tw-fg);
+  font-family: var(--tw-mono);
+  font-size: var(--tw-fs-mono);
   white-space: nowrap;
   cursor: pointer;
+}
+
+.mention {
+  padding: 0 3px;
+  border-bottom: 0;
+  border-radius: var(--tw-radius-sm);
+  background: var(--tw-fill);
 }
 
 .mention:hover {
@@ -191,21 +271,38 @@ vscode-button::part(content) {
   caret-color: var(--tw-cursor);
 }
 
-/* Tiptap's Placeholder extension had no styling at all, so it never showed. */
+/*
+ * Tiptap's Placeholder extension had no styling at all, so it never showed.
+ * One line, cut short in a narrow panel rather than wrapping under the
+ * composer's switches.
+ */
+.tiptap p.is-editor-empty:first-child {
+  position: relative;
+}
+
 .tiptap p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  float: left;
-  height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--tw-fg-faint);
   pointer-events: none;
 }
 
+/* A thumbnail: small enough to leave the draft and the composer's buttons in view. */
 .imageContainer {
   position: relative;
   display: inline-block;
-  width: 120px;
-  height: 120px;
-  border: 1px solid var(--tw-rule);
+  width: 64px;
+  height: 64px;
+  margin: 0 4px 4px 0;
+  vertical-align: bottom;
+  border-radius: var(--tw-radius);
+  background: var(--tw-fill);
   overflow: hidden;
 }
 
@@ -223,10 +320,11 @@ vscode-button::part(content) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
   background: var(--tw-bg);
-  border: 1px solid var(--tw-rule);
+  border: 0;
   color: var(--tw-fg-dim);
   cursor: pointer;
   z-index: 2;
@@ -245,13 +343,11 @@ h3,
 h4,
 h5,
 h6 {
-  margin: 1.4em 0 0.6em;
+  margin: 1.4em 0 0.5em;
   color: var(--tw-fg);
   font-size: var(--tw-fs);
   font-weight: 600;
-  letter-spacing: var(--tw-track);
   line-height: 1.4;
-  text-transform: lowercase;
 }
 
 /*
@@ -272,9 +368,9 @@ h6 {
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: var(--tw-fs);
+  font-size: var(--tw-fs-xs);
   font-weight: 600;
-  letter-spacing: var(--tw-track);
+  letter-spacing: var(--tw-track-caps);
   line-height: 24px;
   text-transform: uppercase;
 }
@@ -288,7 +384,6 @@ h3:first-child {
 label {
   color: var(--tw-fg-dim);
   font-size: var(--tw-fs-sm);
-  letter-spacing: var(--tw-track);
 }
 
 hr {

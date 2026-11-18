@@ -5,10 +5,11 @@
  *
  * The list comes from GraphQL (one call per project, pipeline and
  * approval state included); a merge request's description and diffs
- * from the REST API. GitLab has no app install to lean on, so every
- * project brings a token; a group token pasted for each project works.
+ * from the REST API. GitLab has no app install to lean on, so projects
+ * read with saved tokens: one group or personal token for all of them,
+ * or a project token each.
  */
-import { arr, baseUrlOf, CheckState, cutPatch, Forge, IssueSummary, MAX_FILES, MAX_PULLS_PER_REPO, MergeState, num, PullApprovals, PullCheck, PullContent, PullFile, PullSummary, readJson, rec, RepoRecord, RepoStore, ReviewPostAs, ReviewState, rollup, str } from "./forge"
+import { arr, baseUrlOf, CheckState, cutPatch, Forge, IssueSummary, MAX_FILES, MAX_LISTED_REPOS, MAX_PULLS_PER_REPO, MergeState, num, PullApprovals, PullCheck, PullContent, PullFile, PullSummary, readJson, rec, RepoRecord, RepoStore, ReviewPostAs, ReviewState, rollup, str, tokenProbe } from "./forge"
 import {
   GatewayPlugin,
   PluginContext,
@@ -160,6 +161,40 @@ const countDiff = (diff: string): { additions: number; deletions: number } => {
   return { additions, deletions }
 }
 
+/**
+ * A note's text with nothing GitLab would run: a line that starts with a
+ * slash command (`/approve`, `/close`, `/label ~x`) is a quick action when
+ * the token's account posts it, and what a model writes about a pull is
+ * steered by the pull. Outside code blocks the slash is escaped, which
+ * reads the same and does nothing.
+ */
+export const withoutQuickActions = (body: string): string => {
+  // A fence as Markdown reads one: at most three spaces in, three or more
+  // of one character, no backtick after a backtick fence, and closed only
+  // by the same character at least as long. Anything looser would let a
+  // line that merely looks like a fence switch the escaping off.
+  let fence: { char: string; length: number } | undefined
+  return body
+    .split("\n")
+    .map((line) => {
+      const mark = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+      if (mark) {
+        const [, run, rest] = mark
+        if (!fence) {
+          if (run[0] === "~" || !rest.includes("`")) {
+            fence = { char: run[0], length: run.length }
+            return line
+          }
+        } else if (run[0] === fence.char && run.length >= fence.length && !rest.trim()) {
+          fence = undefined
+          return line
+        }
+      }
+      return fence ? line : line.replace(/^(\s*)\/(?=[a-z_]+\b)/i, "$1\\/")
+    })
+    .join("\n")
+}
+
 export class GitLabForge implements Forge {
   public readonly noun = "Merge request"
 
@@ -203,6 +238,22 @@ export class GitLabForge implements Forge {
   public async whoAmI(repo: RepoRecord, signal: AbortSignal): Promise<string | undefined> {
     const response = await this._context.fetch(`${this.baseUrl}/api/v4/user`, { headers: this.headers(repo), signal })
     return str((await readJson(response, "Asking GitLab who the token is")).username) || undefined
+  }
+
+  public async listRepos(token: string, signal: AbortSignal): Promise<string[]> {
+    const names: string[] = []
+    for (let page = 1; names.length < MAX_LISTED_REPOS; page++) {
+      const response = await this._context.fetch(`${this.baseUrl}/api/v4/projects?membership=true&simple=true&archived=false&order_by=last_activity_at&per_page=100&page=${page}`, { headers: this.headers(tokenProbe(token)), signal })
+      const answer = arr(await readJson(response, "Listing what the token can read"))
+      names.push(...answer.map((entry) => str(rec(entry).path_with_namespace)).filter(Boolean))
+      if (answer.length < 100) break
+    }
+    return names.slice(0, MAX_LISTED_REPOS)
+  }
+
+  public tokenKind(token: string): string | undefined {
+    if (token.startsWith("glpat-")) return "personal, group or project"
+    return undefined
   }
 
   public async checkRepo(repo: RepoRecord, signal: AbortSignal): Promise<string> {
@@ -279,7 +330,7 @@ export class GitLabForge implements Forge {
 
   public async commentIssue(repo: RepoRecord, number: number, body: string, signal: AbortSignal): Promise<{ url?: string }> {
     const note = await readJson(
-      await this._context.fetch(`${this.project(repo)}/issues/${number}/notes`, { method: "POST", headers: { ...this.headers(repo), "Content-Type": "application/json" }, body: JSON.stringify({ body }), signal }),
+      await this._context.fetch(`${this.project(repo)}/issues/${number}/notes`, { method: "POST", headers: { ...this.headers(repo), "Content-Type": "application/json" }, body: JSON.stringify({ body: withoutQuickActions(body) }), signal }),
       `Replying on ${repo.fullName}#${number}`
     )
     const id = num(note.id)
@@ -299,14 +350,23 @@ export class GitLabForge implements Forge {
       await this._context.fetch(`${this.project(repo)}/merge_requests/${pull.number}/notes`, {
         method: "POST",
         headers: { ...this.headers(repo), "Content-Type": "application/json" },
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ body: withoutQuickActions(body) }),
         signal
       }),
       what
     )
     // GitLab has approvals but no "request changes": that stays a note.
     if (as === "approve")
-      await readJson(await this._context.fetch(`${this.project(repo)}/merge_requests/${pull.number}/approve`, { method: "POST", headers: this.headers(repo), signal }), `${what} (approve)`)
+      // With the commit named, GitLab refuses the approval if the branch moved since.
+      await readJson(
+        await this._context.fetch(`${this.project(repo)}/merge_requests/${pull.number}/approve`, {
+          method: "POST",
+          headers: { ...this.headers(repo), "Content-Type": "application/json" },
+          body: JSON.stringify(pull.headSha ? { sha: pull.headSha } : {}),
+          signal
+        }),
+        `${what} (approve)`
+      )
     const id = num(note.id)
     return { url: id !== undefined ? `${pull.url}#note_${id}` : pull.url }
   }
@@ -381,7 +441,7 @@ export const gitlabPlugin: GatewayPlugin = {
   id: "gitlab",
   name: "GitLab",
   description:
-    "Watch projects on gitlab.com or a self-managed GitLab and see their open merge requests, pipelines and approvals. Reads with an access token per project.",
+    "Watch projects on gitlab.com or a self-managed GitLab and see their open merge requests, pipelines and approvals. Reads with access tokens saved once and shared by any number of projects.",
   memberRoutes: MEMBER_ROUTES,
   create: (context) =>
     new PullsPlugin(context, (store, ctx) => new GitLabForge(store, ctx), undefined, "gitlab")

@@ -1,13 +1,11 @@
 /*
  * The workspace search behind a reply. One quiet line under the "twinny"
- * label; the sources unfold beneath it on request. Same idiom as the
- * thinking section: a left rule, small tracked type, nothing boxed.
+ * label; the sources unfold beneath it on request. Small type, nothing
+ * round it, like the tool steps.
  */
 .panel {
   position: relative;
-  margin: -2px 0 10px;
-  padding-left: 10px;
-  border-left: 1px solid var(--tw-rule);
+  margin: 0 0 10px;
   font-size: var(--tw-fs-sm);
 }
 
@@ -93,7 +91,7 @@
   content: "⠋";
   display: inline-block;
   color: var(--tw-cursor);
-  font-family: var(--tw-font);
+  font-family: var(--tw-mono);
   font-size: 12px;
   line-height: 1;
   animation: braille 0.8s steps(1, end) infinite;
@@ -123,7 +121,7 @@
   background: linear-gradient(
     90deg,
     transparent 0%,
-    var(--tw-accent) 50%,
+    var(--tw-mark) 50%,
     transparent 100%
   );
   background-size: 40% 100%;
@@ -218,7 +216,7 @@
   border: 0;
   background: transparent;
   color: var(--tw-fg-dim);
-  font-family: var(--tw-font);
+  font-family: var(--tw-mono);
   font-size: var(--tw-fs-sm);
   line-height: 18px;
   text-align: left;
@@ -284,7 +282,7 @@
   flex-shrink: 0;
   color: var(--tw-fg-faint);
   font-size: var(--tw-fs-xs);
-  letter-spacing: var(--tw-track);
+  letter-spacing: var(--tw-track-caps);
   text-transform: uppercase;
 }
 
@@ -310,7 +308,7 @@
 .meterFill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: var(--tw-accent);
+  background: var(--tw-mark);
   transform-origin: left;
   animation: fill 0.5s ease-out;
 }
@@ -360,13 +358,14 @@
   display: flex;
   flex-direction: column;
   margin: 3px 0 0;
-  padding: 0 0 0 10px;
-  border-left: 1px solid var(--tw-rule-soft);
+  padding: 6px 10px;
   color: var(--tw-fg-dim);
-  font-family: var(--tw-font);
+  font-family: var(--tw-mono);
   font-size: var(--tw-fs-xs);
   line-height: 1.5;
   overflow: hidden;
+  border-radius: var(--tw-radius);
+  background: var(--tw-fill);
 }
 
 .previewLine {
@@ -409,7 +408,7 @@
 
   .panelBusy .sweep {
     animation: none;
-    background: var(--tw-accent);
+    background: var(--tw-mark);
     background-size: 100% 100%;
     opacity: 0.4;
   }

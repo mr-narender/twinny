@@ -68,6 +68,13 @@ to change there. To wipe a gateway and start again, stop it and run
 `quickstart --fresh` (or `reset --yes --all`; see
 [Starting over](#starting-over)).
 
+Later, `twinny-server` with no command starts that gateway again from any
+directory. Without `--config`, `serve`, `keys`, `usage` and the other
+commands look for `$TWINNY_CONFIG`, then `./twinny.gateway.json`, then the
+configuration served last (remembered in `~/.twinny/twinny-server.json`),
+then `~/twinny.gateway.json`. Finding none, a bare `twinny-server` on a
+terminal runs the quickstart; off a terminal it exits with `2`.
+
 1. Have a backend running. The starter configuration uses Ollama on its
    default port:
 
@@ -483,6 +490,13 @@ One JSON file, passed with `--config`. Every field except `providers` and
 | `teamDefaults.{chat,fim,embeddings}` | The alias a developer gets for each job on Connect to team. | none |
 | `policy.teamOnly` | Only the team gateway: a connected developer may not add or activate providers of any other kind. | `false` |
 | `policy.lockDefaults` | Keep the team's default models active for their jobs while connected. | `false` |
+| `policy.agent.off` | Agent mode is off on connected extensions: the chat answers without reading or changing the workspace. | `false` |
+| `policy.agent.commands` | `ask`: every command the agent runs waits for the developer's Run (auto-run and Always run do nothing). `off`: the agent cannot run commands. | developer's choice |
+| `policy.agent.edits` | `review`: every change the agent makes waits in the editor as a diff to accept. | developer's choice |
+| `policy.agent.mcp` | `off`: agent mode uses none of the MCP servers developers set up (`commands: "off"` does this too). | developer's choice |
+| `policy.agent.fetch` | `off`: agent mode reads no web pages, whatever `twinny.chatToolsFetch` says. | developer's choice |
+| `policy.agent.blockedPaths` | Paths, in `.gitignore` syntax from each workspace's root, the agent may not list, read, search, see in git or change. At most 200. | none |
+| `policy.secretShield` | Which backends get prompts with credentials swapped for placeholders: `offMachine` (hosted APIs, other hosts, paired devices, other gateways, the team pool), `always` (every backend) or `off`. Applies on every plan. | `offMachine` |
 | `recording.chat`, `recording.fim`, `recording.embeddings` | Keep the content of these requests. Needs the `recording` licence feature; disclosed to developers. | `false` |
 | `recording.retentionDays` | Records older than this are deleted. | `90` |
 | `recording.dir` | Where records live. | `~/.twinny/server/recordings` |
@@ -542,7 +556,7 @@ balancing, no fallback chain and no automatic download.
 | `/twinny/v1/admin/recordings` | GET | admin key | A page of recorded requests: `route`, `key`, `since`, `q`, `before`, `limit`. With the store and settings summary. |
 | `/twinny/v1/admin/recordings/<id>` | GET | admin key | One record in full. |
 | `/twinny/v1/admin/recordings/export` | GET | admin key | JSON lines: `format=training` (default) or `raw`; same filters. |
-| `/twinny/v1/signin` | POST | no | Starts a sign-in: `{"name","machine"}` (both optional suggestions) → `{"deviceCode","userCode","expiresAt","interval"}`. Bounded to 5 waiting per client address and 100 in total; ten-minute expiry. |
+| `/twinny/v1/signin` | POST | no | Starts a sign-in: `{"name","machine"}` (both optional suggestions) → `{"deviceCode","userCode","expiresAt","interval"}`. Bounded to 5 waiting per client address (the `X-Forwarded-For` address behind a loopback reverse proxy, as for the demo) and 100 in total; ten-minute expiry. |
 | `/twinny/v1/signin/poll` | POST | no | `{"deviceCode"}` → `{"status"}`: `pending`, `slow-down` (polled faster than `interval`), `denied`, `expired`, or `approved` with `key` and `name`, returned once. |
 | `/twinny/v1/page-link` | POST | personal key | A one-time code that signs this key in to the page: `{}` → `{"code","expiresAt"}`. Valid for one minute; at most 5 outstanding per key name. Refused for the shared token and a demo's guests. |
 | `/twinny/v1/page-link/open` | POST | no | `{"code"}` → `{"key","name"}`, once: the page trades the code for the key that asked for it. 410 for a code that is used, expired or unknown; the key's own refusal if it was revoked meanwhile. Audited as `page.signed-in`. |
@@ -679,6 +693,51 @@ every chat's system prompt on connected extensions. It is shown on the
 consent card before connecting and re-read at every VS Code start. Edit
 it under **Policy → Team system prompt**.
 
+### Agent mode
+
+`policy.agent` limits what agent mode (the chat reading, searching and
+changing files and running commands) may do on connected extensions. It
+only ever tightens a developer's own settings: a rule left out leaves
+theirs in force.
+
+```json
+"policy": {
+  "agent": {
+    "commands": "ask",
+    "edits": "review",
+    "blockedPaths": [".env*", "infra/", "secrets/**"]
+  }
+}
+```
+
+- `off: true` turns agent mode off; the chat's agent switch is shown off
+  and cannot be turned on.
+- `commands: "ask"` puts every command to the developer first;
+  `commands: "off"` takes commands away. Reading git history is not a
+  command and still works.
+- `edits: "review"` makes every change wait as a diff in the editor, and
+  the agent stops until it is answered.
+- `mcp: "off"` keeps the MCP servers developers set up
+  (`twinny.chatToolsMcpServers`) out of agent mode; with commands asked
+  for, every MCP call is asked for too.
+- `fetch: "off"` takes away the agent's reading of web pages
+  (`twinny.chatToolsFetch`, asked for address by address).
+- `blockedPaths` hides paths from every tool the agent has, git included,
+  on top of each repository's `.gitignore`. A command the agent runs is
+  not held to them; use `commands` for that.
+
+Edit it under **Policy → Agent mode**. It is shown on the consent card
+like the other rules, and besides the re-read at VS Code start, an
+extension re-reads the policy before an agent reply when it is more than
+a minute old, so a change reaches developers at their next agent reply.
+The rules are enforced by the extension. An extension older than the
+rules would ignore them, so while a team sets any, the gateway refuses
+agent requests (a chat that offers or answers tools, or carries the
+agent's prompt) from a client that does not send
+`X-Twinny-Agent-Rules: 1`, and tells the developer to update twinny or
+switch agent mode off. Plain chat, completions and embeddings are served
+as before. A newer extension connected to an older gateway gets no rules.
+
 ### Routing rules
 
 `policy.routing` decides which aliases may serve a workspace. The
@@ -708,6 +767,26 @@ Plugin requests also count against `limits.maxActiveRequests`, wait in
 the same queue, get the same `limits.maxOutputTokens` and deadline, and
 are aborted when the gateway stops. `limits.perKey` applies to each
 plugin under its own name (`plugin:github`).
+
+### Secret shield
+
+`policy.secretShield` swaps API keys, tokens, private keys and passwords
+in a prompt for placeholders such as `REDACTED_GITHUB_TOKEN_1` before the
+request reaches a backend, and puts them back in the reply, for every
+client: the extension, the TUI and Neovim.
+
+| Value | Prompts shielded on their way to |
+| --- | --- |
+| `offMachine` (default) | hosted APIs, backends on other hosts, paired devices, other gateways and the team pool |
+| `always` | every backend, including those on the gateway's own host |
+| `off` | nothing; prompts are forwarded as they arrive |
+
+Unlike the rules above it needs no licence feature. Set it under
+**Policy** on the admin page or in the file:
+
+```json
+"policy": { "secretShield": "always" }
+```
 
 ## Pooling teammates' computers
 
@@ -1196,6 +1275,13 @@ the gateway.
   end. On expiry the backend call is aborted and the client sees `timeout`.
 - **Backpressure.** Chunks are written at the pace the client reads them;
   nothing is buffered whole. Request bodies are capped by `maxBodyBytes`.
+- **Slow bodies.** The small JSON bodies of the other routes (sign-in,
+  join, page links, admin and plugin calls) must arrive within 30 seconds.
+  A caller that sends headers and then stalls is answered `400` with "The
+  request body did not arrive in time." and its connection is closed a
+  second later, so an open port cannot be held by connections that never
+  finish asking. A body over its route's size limit is refused as soon as
+  it is over. Inference bodies are bound by `requestDeadlineMs` instead.
 - **Shutdown.** On SIGINT or SIGTERM the gateway stops accepting requests
   (health answers `503 stopping`), waits up to `shutdownGraceMs` for active
   requests, aborts whatever remains with `cancelled`, closes every
@@ -1249,6 +1335,8 @@ telemetry, conversation storage or analytics.
   types and released only to the holder of the 64-hex device code, once.
   Requests live in memory for ten minutes and are capped per client
   address, so the open sign-in routes cannot fill memory or mint keys.
+  Behind a reverse proxy on loopback the address is the one the proxy
+  forwards, so one developer's waiting requests never block another's.
 - **Keys are hashed at rest** (SHA-256) and compared in constant time. The
   file is created with mode 600 and rewritten atomically. A lost key cannot
   be recovered; revoke it and make a new one.
@@ -1427,13 +1515,12 @@ pull-request plugins (GitHub, GitLab, Gitea, Bitbucket) let them do what a
 reviewer does:
 
 - read the pulls and issues, and sync;
-- review a pull now, ask about the review, and post it to the host as a
-  comment, once;
+- review a pull now and ask about it;
 - triage an issue and post the reply and the labels the model suggested;
 - set who they are on the host (**You on GitHub**), which marks the pulls
   waiting for their approval on their page alone.
 
-Adding or removing repositories, tokens, auto-review and auto-post, the
+Adding or removing repositories, tokens, auto-review, the
 GitHub App, the host URL and the review model stay with admins. The
 notifiers (Slack, Discord, Teams), SSO sign-in, shared context and backups
 are for admins only and cannot be shared. A plugin that is off, or a plan
@@ -1484,13 +1571,36 @@ branch and activity (updated today, this week, this month, or quiet for
 change, checks, merge state, review state) that the column headers set
 too. The issues table has the same shape with its own views (not triaged,
 high priority, duplicates, reply pending, triage failed). Filters and
-ordering are remembered per host in the browser. Under the review state
+ordering are remembered per host in the browser. A pull that is always
+there and never yours to act on can be set aside: the eye at the end of
+its row ignores it, which takes it out of the list, the views and the
+counts in that browser only. The **Ignored** switch brings the ignored ones
+back, dimmed, each with the eye that returns it. Under the review state
 each pull shows its approvals as the host reports them: how many it has
 against how many the base branch requires (`1/2 approved`), how many
 reviewers asked for changes, and how many are still to answer; the
 opened pull names them. This detail is only ever asked for with the
 scopes a plain repository token has; a host that refuses it (an older
 GitHub Enterprise, say) is listed without it from then on.
+
+**Getting around.** Where you are is in the page's address: the view
+(`#people`, `#plugin:github`), the section inside a plugin
+(`#plugin:github/issues`, `#plugin:github/setup`) and the pull or issue
+opened there (`#plugin:github/pull/<repository id>/<number>`). Each move
+is a history entry, so the browser's Back leaves a pull for the list it
+was opened from and Forward returns to it, a reload stays where it was,
+and a copied address opens the same pull for anyone signed in who may
+see it.
+
+**Images in a description.** The admin page loads nothing from outside
+the gateway, so a description's images come through it. On GitHub the
+gateway asks for the description as GitHub renders it, takes each
+image's address from there (an attachment on a private repository gets
+a signed one, good for a few minutes) and fetches it from GitHub's own
+hosts without the token. Only images that description holds are
+fetched, only PNG, JPEG, GIF, WebP and AVIF, and none over 8 MB; an
+image elsewhere, or on GitLab, Gitea or Bitbucket, is shown as a link
+that opens it.
 
 **Where you stand.** The page learns who you are on the host from the
 first token it syncs with (or from the *you on GitHub* field under the
@@ -1530,13 +1640,19 @@ through it until it is set up again.
 **Self-hosted.** Set the host URL on the page for GitHub Enterprise
 Server or a self-managed GitLab; the public hosts are the default.
 
-**Reviews by your own models.** A pull's page has **review now**: the
+**Reviews by your own models.** A pull's page has **review with
+<model>**: the
 gateway sends the description and diffs to one of its chat aliases (the
 *review model* on the plugin page; the first chat alias unless chosen)
 and keeps what came back on the server, per pull and commit, in the
 plugin's `reviews.json`. The review shows on the pull's page with the
 model, the time and who asked; a pull that has moved on marks it as
-being for an earlier commit. Posting it to the host is a separate, explicit step (or auto-post).
+being for an earlier commit. It stays on the gateway: the page does not post reviews to the host.
+
+A review runs on the server, not in the page: leave the pull, open
+another, or close the tab, and it carries on. The list marks the pull as
+*model reviewing*, and its page shows the review when it lands. Two
+reviews may run at once; a third is refused until one finishes.
 
 Ticking **auto-review** on a repository reviews its new and updated
 pulls in the background: one at a time, newest first, never drafts, and
@@ -1548,17 +1664,10 @@ what they cost. The prompt carries at most 24k characters of description
 and diff (larger patches are named but left out) and asks for at most
 1,500 tokens back, to suit local models with small contexts.
 
-**Posting a review to the host.** A finished review has **post to
-GitHub** (or GitLab, Gitea, Bitbucket) with a choice of how the host
-should record it: a comment, a change request or an approval. GitHub and
-Gitea take all three as a review; GitLab posts a note and, for an
-approval, approves; Bitbucket posts a comment and, when asked, approves
-or requests changes. The review is posted with a footer naming the model
-and the commit, and the page shows when and where it went. Ticking
-**auto-post** on a repository posts every finished review as a comment
-without anyone pressing the button, which with **auto-review** makes a
-fully automatic first pass on every pull. A `review.posted` event goes
-out for the notifiers.
+**Reviews are not posted to the host.** The page has no control that
+posts a review, and **auto-post** is gone: a repository that had it
+ticked no longer posts anything. The `…/review/post` route below is
+still there for scripts that call it on purpose.
 
 **Issue triage.** On GitHub, GitLab and Gitea the plugin also lists a
 repository's open issues. **Triage** sends one to the review model with
@@ -1572,11 +1681,20 @@ wait for a person. An `issue.triaged` event goes out, marked as a
 warning when the priority is high, so a channel can hear about the
 serious ones.
 
-**Asking about a review.** Under a finished review is a box for
-questions. Each one goes to the review model with the pull, the review
-and the earlier questions in front of it, and the exchange is kept on
-the review as its thread, on the server, until the pull is reviewed
-again. Nothing in the thread is posted to the host.
+**Asking about a pull.** Under a finished review is a box for
+questions, with a few to start from. Each one goes to the review model
+with the pull, the review and the earlier questions in front of it, under
+instructions to answer the question and not to review again. **Enter**
+sends, **Shift+Enter** starts a new line. The exchange is kept on the
+review as its thread, on the server, until the pull is reviewed again.
+
+Lines of a file can be asked about where they are: select them in the
+diff, press **Ask about these lines**, and the question and its answer
+sit under that file. The selected lines go to the model with their
+`+`/`-` signs, the file's path and the line numbers, and the exchange
+joins the pull's thread with the lines quoted. This needs a finished
+review of the pull, and one question is answered at a time. Nothing
+asked or answered is posted to the host.
 
 **Reasoning models.** A model that thinks before answering (Qwen 3 and
 the like) is asked not to. Ollama's OpenAI-compatible route ignores
@@ -1600,8 +1718,8 @@ without a word.
 | `GET /repos/<id>/pulls/<number>` | one pull with its description, files and latest review |
 | `POST /repos/<id>/pulls/<number>/review` | review it now with the review model; answers when the review is done |
 | `POST /repos/<id>/pulls/<number>/review/post` `{ as? }` | post the finished review to the host as `comment` (default), `request-changes` or `approve` |
-| `POST /repos/<id>/pulls/<number>/review/ask` `{ question }` | ask the review model about the finished review; answers with the review, its thread grown by the question and the answer |
-| `PUT /repos/<id>` `{ autoReview?, autoPost?, autoTriage? }` | review new and updated pulls in the background; post every finished review as a comment; triage new issues in the background |
+| `POST /repos/<id>/pulls/<number>/review/ask` `{ question, selection? }` | ask the review model about the pull; `selection` is `{ path, text, startLine?, endLine? }` for lines picked out of a diff. Answers with the review, its thread grown by the question and the answer |
+| `PUT /repos/<id>` `{ autoReview?, autoTriage? }` | review new and updated pulls in the background; triage new issues in the background (`autoPost` is still accepted and does nothing) |
 | `GET /repos/<id>/issues/<number>` | the issue with its body and latest triage |
 | `POST /repos/<id>/issues/<number>/triage` | triage it now with the review model |
 | `POST /repos/<id>/issues/<number>/triage/post` `{ reply?, replyText?, labels?, labelNames? }` | post the reply and/or apply the labels |
@@ -1707,7 +1825,10 @@ destination** writes and deletes a probe, **back up now** does one at
 once.
 
 An archive is a gzipped tar with a manifest (sizes and SHA-256 hashes,
-checked on restore), readable by `tar` when not encrypted. With a
+checked on restore), readable by `tar` when not encrypted. A sqlite
+recordings database goes in as one consistent snapshot taken while the
+gateway runs (its `-wal`/`-shm` files are not copied), and a restore
+removes any stale `-wal`/`-shm` left next to the database it writes. With a
 passphrase it is AES-256-GCM encrypted (`.tar.gz.enc`); keep the
 passphrase somewhere other than the server, since the settings file that
 holds it is inside the backup. After a successful run, archives beyond

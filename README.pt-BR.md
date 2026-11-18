@@ -19,6 +19,7 @@ O [guia rápido](https://docs.twinny.dev/getting-started/quick-start/) explica c
 - **[Autocompletar código](https://docs.twinny.dev/features/code-completion/).** Sugestões de preenchimento no meio do código enquanto você digita, transmitidas como texto fantasma e encerradas em um ponto sensato. O contexto vem dos arquivos abertos, dos imports, do servidor de linguagem e das suas edições recentes. Ajustado para funcionar bem com um modelo de 7B.
 - **[Edição inline](https://docs.twinny.dev/features/inline-edit/).** Ctrl+I, descreva a mudança e revise como um diff no editor. Aceite ou rejeite por trecho. *Corrigir com o twinny* em qualquer diagnóstico.
 - **[Chat](https://docs.twinny.dev/features/chat/)** sobre o seu código. Digite `@` para anexar arquivos, símbolos, o painel de problemas, o diff do git, o terminal ou uma busca no índice do workspace. As conversas são preservadas.
+- **[Modo agente](https://docs.twinny.dev/features/agent-mode/)** (experimental). Um botão no chat, ou Shift+Tab, deixa o modelo ler, buscar e editar arquivos e rodar comandos no workspace, com cada passo mostrado na resposta. Comandos pedem confirmação, a menos que você diga o contrário.
 - **[Índice do workspace](https://docs.twinny.dev/features/workspace-index/).** Busca híbrida por palavras-chave e vetores no workspace, reordenada antes de chegar ao prompt e atualizada ao salvar. As fontes aparecem sob as respostas.
 - **[Revisão de código](https://docs.twinny.dev/features/code-review/)** da árvore de trabalho, de um branch em relação à sua base ou de um pull request do GitHub, e **[mensagens de commit](https://docs.twinny.dev/features/commit-messages/)** a partir do diff preparado.
 - **[Terminal](https://docs.twinny.dev/features/terminal/).** Escreva um comando a partir de uma descrição, mostrado antes de rodar. Quando um falha, o twinny encontra o arquivo e a linha e oferece a correção.
@@ -54,7 +55,7 @@ Isso encontra o seu servidor de modelos, escreve uma configuração, cria uma ch
 - **Gravação** (licença): mantenha prompts e respostas no gateway, com aviso a cada desenvolvedor, exportados como dados de treinamento.
 - **Operação**: um log de auditoria encadeado por hash de cada mudança administrativa, chaves de administrador somente leitura, métricas para o Prometheus, custos por desenvolvedor quando um modelo tem preço, uma fila de requisições para uma GPU compartilhada, Docker e um chart Helm.
 
-Gratuito para cinco desenvolvedores, para sempre. Uma licença comprada com cartão adiciona assentos e ativa política, gravação e plugins; é verificada localmente e o gateway nunca liga para casa. Veja o [guia de equipes](https://docs.twinny.dev/teams/overview/), [licenciamento e assentos](https://docs.twinny.dev/teams/licensing/) e a referência do operador em [docs/gateway.md](docs/gateway.md).
+Gratuito para cinco desenvolvedores, para sempre. Uma licença comprada com cartão adiciona assentos e ativa política, gravação e plugins; é verificada localmente e o gateway nunca liga para casa. Trabalha sozinho? A **Personal** custa $29 uma vez: os mesmos recursos no seu próprio gateway, para sempre. Veja o [guia de equipes](https://docs.twinny.dev/teams/overview/), [licenciamento e assentos](https://docs.twinny.dev/teams/licensing/) e a referência do operador em [docs/gateway.md](docs/gateway.md).
 
 ## Estrutura do repositório
 
@@ -75,7 +76,7 @@ Issues e pull requests são bem-vindos no [GitHub](https://github.com/twinnydotd
 
 ## Apoie o twinny
 
-O twinny é gratuito e de código aberto. Se ele se paga, uma licença de equipe é a melhor forma de apoiar. Doações também são bem-vindas. Bitcoin: `1PVavNkMmBmUz8nRYdnVXiTgXrAyaxfehj`
+O twinny é gratuito e de código aberto. Se ele se paga, [comprar uma licença](https://twinny.dev/#pricing) é a melhor forma de apoiar: a Personal custa $29 uma vez.
 
 ## Licença
 

@@ -12,10 +12,12 @@ import http from "node:http"
 import { AddressInfo } from "node:net"
 
 import { messageOf } from "../common/errors"
+import { agentPolicyIsEmpty } from "../common/team-policy"
 import { InferenceError } from "../extension/inference/errors"
 import { handleRemoteRequest } from "../protocol/handler"
 import { PEER_CLOSE, peerRoutePath } from "../protocol/peer"
 import {
+  AGENT_RULES_HEADER,
   GATEWAY_PAGE_PATH,
   REMOTE_JOIN_PATH,
   REMOTE_PAGE_LINK_OPEN_PATH,
@@ -33,6 +35,7 @@ import {
 import {
   isInferenceCapability,
   matchRemoteRoute,
+  RemoteRequestError,
   toErrorBody
 } from "../protocol/wire"
 
@@ -40,7 +43,8 @@ import { PluginError, PluginHost } from "./plugins/host"
 import { exportLines } from "./recording/export"
 import { Recorder } from "./recording/recorder"
 import type { RecordingQuery, RecordingRoute } from "./recording/store"
-import { adminPageHtml } from "./admin-page"
+import { adminPageHeaders, adminPageHtml } from "./admin-page"
+import { isAgentRequest, OUTDATED_AGENT_CLIENT } from "./agent-rules"
 import type { AuditLog } from "./audit"
 import {
   GatewayConfig,
@@ -208,9 +212,21 @@ export class GatewayServer {
           this.crashed(req, res, error)
         )
     )
-    this._server.on("upgrade", (req, socket, head) =>
-      this.handleUpgrade(req, socket as import("node:net").Socket, head)
-    )
+    this._server.on("upgrade", (req, socket, head) => {
+      // Node hands the socket over with no error listener of its own: a
+      // caller who resets the connection while being refused would
+      // otherwise bring the whole gateway down.
+      socket.on("error", () => socket.destroy())
+      try {
+        this.handleUpgrade(req, socket as import("node:net").Socket, head)
+      } catch (error) {
+        socket.destroy()
+        this._options.log.error({
+          event: "peer.crashed",
+          message: error instanceof Error ? error.message : String(error)
+        })
+      }
+    })
     this._gate = new InferenceGate({
       limits: _options.config.limits,
       config: () => this.config,
@@ -424,11 +440,12 @@ export class GatewayServer {
       res.end(text)
       return
     }
-    const since = url.searchParams.get("since")
     const limit = Number(url.searchParams.get("limit") ?? 200)
+    const since = this.sinceOf(url, res)
+    if (since === false) return
     sendJson(res, 200, {
       entries: audit.query({
-        ...(since ? { since: parseSince(since, new Date()) } : {}),
+        ...(since ? { since } : {}),
         ...(url.searchParams.get("actor") ? { actor: url.searchParams.get("actor") as string } : {}),
         ...(url.searchParams.get("action") ? { action: url.searchParams.get("action") as string } : {}),
         limit: Number.isFinite(limit) ? Math.min(Math.max(1, limit), 1000) : 200
@@ -709,7 +726,13 @@ export class GatewayServer {
             })
             return
           }
-          sendJson(res, 200, summarizeUsage(usage.dir, since, now, pricingOf(this.config)))
+          const summary = summarizeUsage(usage.dir, since, now, pricingOf(this.config))
+          // The same length of time just before, so the page can say how the period compares.
+          if (url.searchParams.get("compare") === "previous") {
+            const before = new Date(since.getTime() - (now.getTime() - since.getTime()))
+            summary.previous = summarizeUsage(usage.dir, before, since, pricingOf(this.config)).total
+          }
+          sendJson(res, 200, summary)
           return
         }
         case "keys": {
@@ -861,6 +884,18 @@ export class GatewayServer {
       )
       return
     }
+    // A demo's visitor and its hour-long guests are strangers: none of them
+    // gets to answer the team's prompts.
+    if (auth.visitor || this._seats.isGuest(auth.principal)) {
+      refuse(
+        403,
+        new InferenceError(
+          "authentication",
+          "A demo key cannot share a computer; use a personal gateway key."
+        )
+      )
+      return
+    }
     if (this._draining) {
       refuse(
         503,
@@ -883,6 +918,18 @@ export class GatewayServer {
     }
     const connection = acceptUpgrade(req, socket, head)
     peers.attach(connection, auth.principal)
+  }
+
+  /** The `since` a listing was asked for, nothing when it was not; a period that cannot be read is answered 400, and false comes back. */
+  private sinceOf(url: URL, res: http.ServerResponse): Date | undefined | false {
+    const since = url.searchParams.get("since")
+    if (!since) return undefined
+    try {
+      return parseSince(since, new Date())
+    } catch (error) {
+      sendMessage(res, 400, error instanceof Error ? error.message : String(error))
+      return false
+    }
   }
 
   /**
@@ -928,8 +975,9 @@ export class GatewayServer {
       }
       query.outcome = outcome
     }
-    const since = url.searchParams.get("since")
-    if (since) query.since = parseSince(since, new Date())
+    const since = this.sinceOf(url, res)
+    if (since === false) return
+    if (since) query.since = since
     const before = url.searchParams.get("before")
     if (before) query.before = before
     const search = url.searchParams.get("q")
@@ -1576,7 +1624,7 @@ export class GatewayServer {
         sendJson(res, 200, result)
         return
       }
-      const address = req.socket.remoteAddress ?? "unknown"
+      const address = clientAddress(req)
       const started = this._signIns.start({
         name: body.name,
         machine: body.machine,
@@ -1778,13 +1826,7 @@ export class GatewayServer {
         return
       }
       const html = adminPageHtml({ demo: !!this._options.demo })
-      res.writeHead(200, {
-        "Content-Type": "text/html; charset=utf-8",
-        "Content-Length": Buffer.byteLength(html),
-        "Cache-Control": "no-store",
-        "Content-Security-Policy":
-          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:"
-      })
+      res.writeHead(200, { ...adminPageHeaders({ demo: !!this._options.demo }), "Content-Length": Buffer.byteLength(html) })
       res.end(html)
       return
     }
@@ -2022,13 +2064,26 @@ export class GatewayServer {
 
     const recorder = this._options.recorder
     const capture = recorder?.enabled(capability) === true
+    // A team with agent rules hears agent requests only from extensions that follow them.
+    const agentRules =
+      policyLicensed &&
+      !agentPolicyIsEmpty(routes.policy()?.agent) &&
+      req.headers[AGENT_RULES_HEADER.toLowerCase()] !== "1"
     try {
       const outcome = await handleRemoteRequest(capability, req, res, {
         models: routes.models,
         route: ticket.route,
         maxBodyBytes: limits.maxBodyBytes,
         signal: ticket.signal,
-        capture
+        capture,
+        ...(agentRules
+          ? {
+              inspect: (route, body) =>
+                route === "chat" && isAgentRequest(body)
+                  ? new RemoteRequestError(OUTDATED_AGENT_CLIENT, 403, true)
+                  : undefined
+            }
+          : {})
       })
       const ms = Date.now() - started
       if (capture && recorder && outcome.captured && outcome.alias) {
@@ -2072,7 +2127,9 @@ export class GatewayServer {
       this._options.metrics?.request({
         key: principal,
         route: capability,
-        alias: outcome.alias,
+        // A name nobody serves is the caller's to choose: as a label, each
+        // new one would be a series kept for good.
+        alias: outcome.alias && this.routes.providerOf(outcome.alias) ? outcome.alias : "unknown",
         outcome: outcome.outcome,
         status: outcome.status,
         ms,

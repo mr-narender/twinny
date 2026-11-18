@@ -7,7 +7,8 @@
  *   config/<file>            the configuration file
  *   data/…                   the data directory: keys, licence, invites, plugins
  *   usage/…                  the usage files
- *   recordings/…             recorded content, only when asked for
+ *   recordings/…             recorded content, only when asked for; a sqlite
+ *                            database as one consistent snapshot, never its -wal/-shm
  */
 import { createHash } from "node:crypto"
 import fs from "node:fs"
@@ -15,11 +16,12 @@ import os from "node:os"
 import path from "node:path"
 import { gunzipSync, gzipSync } from "node:zlib"
 
+import { loadSqlite } from "../../recording/store"
 import { SERVER_VERSION } from "../../version"
 import type { GatewayPaths } from "../host"
 
 import { decryptArchive, encryptArchive, isEncryptedArchive } from "./crypto"
-import { packTar, TarEntry, unpackTar } from "./tar"
+import { fitsTarName, packTar, TarEntry, unpackTar } from "./tar"
 
 export interface ManifestFile {
   path: string
@@ -81,14 +83,43 @@ const isInside = (parent: string, child: string): boolean => {
   return !!relative && !relative.startsWith("..") && !path.isAbsolute(relative)
 }
 
+const isSqliteFile = (file: string): boolean => file.endsWith(".sqlite")
+/** A database's -wal/-shm, or a snapshot a killed backup left behind: never archived. */
+const isSqliteSidecar = (file: string): boolean => /\.sqlite-(wal|shm)$|\.snapshot$/.test(file)
+
+/**
+ * A consistent copy of a sqlite database the gateway may be writing to.
+ * The main file alone can be an empty shell while the gateway runs in WAL
+ * mode (every row since the last checkpoint is in `-wal`), and copying
+ * the three files one after another gives a torn set. `VACUUM INTO` takes
+ * one read transaction and writes a single-file database next to the
+ * original, in the same private directory; it is read back and removed.
+ * Without node:sqlite the file is read as it is.
+ */
+const snapshotSqlite = (file: string): Buffer => {
+  const sqlite = loadSqlite()
+  if (!sqlite) return fs.readFileSync(file)
+  const snapshot = `${file}.${process.pid}.${Date.now()}.snapshot`
+  const db = new sqlite.DatabaseSync(file)
+  try {
+    db.prepare("VACUUM INTO ?").run(snapshot)
+    return fs.readFileSync(snapshot)
+  } finally {
+    db.close()
+    fs.rmSync(snapshot, { force: true })
+  }
+}
+
 /** Reads what a backup should carry, as tar entries with archive-relative names. */
 export const collectFiles = (paths: GatewayPaths, includeRecordings: boolean): TarEntry[] => {
   const entries: TarEntry[] = []
   const add = (name: string, file: string) => {
+    // A path too long for a tar entry is left out; the rest of the backup is worth more than it.
+    if (!fitsTarName(name)) return
     let data: Buffer
     let stat: fs.Stats
     try {
-      data = fs.readFileSync(file)
+      data = isSqliteFile(file) ? snapshotSqlite(file) : fs.readFileSync(file)
       stat = fs.statSync(file)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return
@@ -106,12 +137,15 @@ export const collectFiles = (paths: GatewayPaths, includeRecordings: boolean): T
     (usageInside !== undefined && (rel === usageInside || rel.startsWith(`${usageInside}/`))) ||
     (recordingsInside !== undefined && (rel === recordingsInside || rel.startsWith(`${recordingsInside}/`))) ||
     (rel.startsWith("plugins/backups/") && rel !== "plugins/backups/settings.json") ||
-    rel.endsWith(".tmp")
+    // Clones the shared-context plugin can fetch again, and the index built from them: large, and not the team's data.
+    rel.startsWith("plugins/context/repos/") ||
+    rel.endsWith(".tmp") ||
+    isSqliteSidecar(rel)
   ))
     add(`data/${relative}`, path.join(dataDir, relative))
   for (const relative of walk(paths.usageDir)) add(`usage/${relative}`, path.join(paths.usageDir, relative))
   if (includeRecordings)
-    for (const relative of walk(paths.recordingsDir)) add(`recordings/${relative}`, path.join(paths.recordingsDir, relative))
+    for (const relative of walk(paths.recordingsDir, isSqliteSidecar)) add(`recordings/${relative}`, path.join(paths.recordingsDir, relative))
   return entries
 }
 
@@ -218,7 +252,12 @@ export const planRestore = (opened: OpenedArchive, paths: GatewayPaths): Restore
   return plan
 }
 
-/** Writes every entry to its place, each file atomically, owner-only. Files not in the backup are left alone. */
+/**
+ * Writes every entry to its place, each file atomically, owner-only. Files
+ * not in the backup are left alone, except a sqlite database's stale
+ * `-wal`/`-shm`: left behind by a gateway that was killed rather than
+ * stopped, SQLite would replay those frames over the restored snapshot.
+ */
 export const restoreArchive = (opened: OpenedArchive, paths: GatewayPaths): string[] => {
   const written: string[] = []
   for (const entry of opened.entries) {
@@ -228,6 +267,7 @@ export const restoreArchive = (opened: OpenedArchive, paths: GatewayPaths): stri
     const tmp = `${to}.${process.pid}.restore`
     fs.writeFileSync(tmp, entry.data as Uint8Array, { mode: entry.mode ? entry.mode & 0o600 || 0o600 : 0o600 })
     fs.renameSync(tmp, to)
+    if (isSqliteFile(to)) for (const sidecar of ["-wal", "-shm"]) fs.rmSync(`${to}${sidecar}`, { force: true })
     written.push(to)
   }
   return written

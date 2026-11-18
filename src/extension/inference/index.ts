@@ -22,12 +22,16 @@ export { leavesMachine, type SecretShieldMode, shieldClient, shouldShield } from
 export { abortable, readText } from "./stream"
 export type {
   ChatChunk,
+  ChatFinishReason,
   ChatMessage,
   ChatRequest,
+  ChatToolCall,
+  ChatToolDefinition,
   EmbeddingRequest,
   EmbeddingResponse,
   FimChunk,
   FimRequest,
+  FimStructuredContext,
   InferenceCapability,
   InferenceClient,
   InferenceModel,
