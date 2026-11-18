@@ -28,6 +28,8 @@ export interface RequestOptionsOllama extends RequestBodyBase {
 
 export interface StreamBodyOpenAI extends RequestBodyBase {
   max_tokens?: number
+  /** llama.cpp: reuse the evaluated prompt of the request before. */
+  cache_prompt?: boolean
 }
 
 export type FimRequestBody = RequestBodyBase | RequestOptionsOllama | StreamBodyOpenAI
@@ -119,7 +121,6 @@ export function createStreamRequestBodyFim(
   const maxTokens = options.numPredictFim > 0 ? options.numPredictFim : undefined
 
   switch (provider) {
-    case API_PROVIDERS.OpenAICompatible:
     case API_PROVIDERS.OpenWebUI:
     case API_PROVIDERS.Ollama:
     case API_PROVIDERS.TwinnyP2P:
@@ -136,6 +137,7 @@ export function createStreamRequestBodyFim(
           ...(stop ? { stop } : {})
         }
       }
+    case API_PROVIDERS.OpenAICompatible:
     case API_PROVIDERS.LMStudio:
       return {
         model: options.model,
@@ -159,6 +161,19 @@ export function createStreamRequestBodyFim(
         stop: stop?.slice(0, MAX_HOSTED_STOP_SEQUENCES)
       }
     case API_PROVIDERS.LlamaCpp:
+      // llama-server in router mode picks the model by this field and
+      // refuses a request without it; a single-model server ignores it.
+      return {
+        ...(options.model ? { model: options.model } : {}),
+        prompt,
+        stream: true,
+        // Keep the work done on the part of the prompt the next request
+        // repeats. Newer servers do so unasked; older ones need telling.
+        cache_prompt: true,
+        temperature: options.temperature,
+        max_tokens: maxTokens,
+        stop
+      }
     case API_PROVIDERS.Oobabooga:
       return {
         prompt,

@@ -70,6 +70,25 @@ suite("Secret shield", () => {
     assert.strictEqual(shield.withheld, false)
   })
 
+  test("a secret-named variable assigned code is not a secret (#575)", () => {
+    const shield = new SecretShield()
+    const code = [
+      "secret_number = random.randint(1, 10)",
+      "secret = random.randint(1, 10)",
+      "tokenizer = Tokenizer(\"gpt-4\")",
+      "token = tokens[index]",
+      "password = settings.password",
+      "api_key = load_key() # from disk"
+    ].join("\n")
+    assert.strictEqual(shield.redact(code), code)
+    assert.strictEqual(shield.withheld, false)
+    // An environment file still is one: quoted, commented, CRLF.
+    assert.strictEqual(
+      shield.redact("API_TOKEN = 'Xk9pLq2vR7mZ' # prod\r\nexport DB_PASSWORD=Tr0ub4dor&3x\r\n"),
+      "API_TOKEN = 'REDACTED_ENV_SECRET_1' # prod\r\nexport DB_PASSWORD=REDACTED_ENV_SECRET_2\r\n"
+    )
+  })
+
   test("restore puts real values back, even split across chunks", () => {
     const shield = new SecretShield()
     shield.redact(`key ${GITHUB}`)
@@ -122,5 +141,49 @@ suite("Secret shield", () => {
     assert.ok(sent.includes("REDACTED_AWS_ACCESS_KEY_1"))
     assert.strictEqual(reply, `Rotate ${AWS} now.`)
     assert.strictEqual(reported, 1)
+  })
+
+  test("structured FIM context is shielded in every field", async () => {
+    let sent = ""
+    const inner = {
+      id: "fake",
+      capabilities: () => ["fim"],
+      models: async () => [],
+      chat: () => (async function* () {})(),
+      embeddings: async () => ({ vectors: [] }),
+      fim: (request) => {
+        sent = JSON.stringify(request)
+        return (async function* () {
+          yield { text: "REDACTED_GITHUB_TOKEN_1" }
+        })()
+      }
+    } as InferenceClient
+    const plan = provider({
+      provider: "openai-chatgpt-plan",
+      type: "fim",
+      apiHostname: undefined
+    })
+    const client = shieldClient(inner, plan)
+    let reply = ""
+    for await (const chunk of client.fim({
+      model: "m",
+      prompt: `prompt ${GITHUB}`,
+      prefix: `prefix ${GITHUB}`,
+      suffix: `suffix ${GITHUB}`,
+      context: {
+        prefix: `structured prefix ${GITHUB}`,
+        suffix: `structured suffix ${GITHUB}`,
+        files: [
+          { name: "related.ts", text: `related ${GITHUB}` },
+          { name: "Recent edits", text: `recent ${GITHUB}` },
+          { name: "IntelliSense context", text: `lsp ${GITHUB}` }
+        ]
+      }
+    })) {
+      reply += chunk.text
+    }
+    assert.ok(!sent.includes(GITHUB), "structured context leaked a secret")
+    assert.ok(sent.includes("REDACTED_GITHUB_TOKEN_1"))
+    assert.strictEqual(reply, GITHUB)
   })
 })

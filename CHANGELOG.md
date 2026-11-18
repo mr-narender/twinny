@@ -2,6 +2,242 @@
 
 What changed in each release of the twinny extension and `twinny-server`. The gateway is built from the same tree and carries the extension's version number. Newest first. A shorter, feature-by-feature version with links to the documentation is at [What's new](https://docs.twinny.dev/reference/whats-new/).
 
+## 4.3.23 · 2026-11-18
+
+Agent mode spends fewer steps looking round, checks its work, finishes its list, and can ask you a question or read a web page. The chat gets a text size and a code size.
+
+- **Fewer, bigger reads.** `read_file` takes several files in one call (`paths`, up to six). A short file comes whole when a slice of it is asked for, and a narrow slice of a long one comes with the lines round it, so a file is no longer read a few dozen lines at a time, a step for each.
+- **The project's check runs after changes.** Set `twinny.chatToolsCheckCommand` (`npm run typecheck`, `cargo check`) and a reply that changed files runs it before it ends, unless the model already did. A failure goes back to the model to fix, at most twice. It runs like any agent command: asked first unless auto-run is on or you chose Always run for it, and one that came with a workspace's settings always asks.
+- **The task list is finished.** A model that answers with steps of its own list still open, after doing some of the work, is told once and carries on. Renames are steered to one `edit_file` call per file with `replace_all`.
+- **The model can ask you.** With `ask_user` the reply waits on a card with the question and the answers offered; pick one, write your own in the message box and press Enter, or skip it. Turn it off with `twinny.chatToolsAsk`.
+- **Web pages.** The model can read a page as text with `fetch_url`: documentation, an issue, a link you paste. Every address is shown with Fetch and Skip first, and a redirect is handed back rather than followed. Turn it off with `twinny.chatToolsFetch` or in the agent settings; a team turns it off for everyone with `policy.agent.fetch: "off"`.
+- **More in the agent settings.** The gear by the agent switch now has web pages (ask or off), questions (on or off) and the check command, beside changes, commands and steps.
+- **Runs of reads and searches fold into one line.** Three or more finished reads, searches and listings in a row show as "read 9 files · 3 searches", which opens to the steps.
+- **Text size and code size.** The composer's settings set the size of the whole chat (replies, your messages, tool steps, what you type) and, apart from it, of code blocks, tool output and diffs. Code in backticks is set level with the sentence round it.
+- **Fixed:** the `input` and `output` labels of an opened tool step were drawn as boxes.
+
+## 4.3.22 · 2026-11-17
+
+`twinny-server` release: the pull-request plugins' page (GitHub, GitLab, Gitea, Bitbucket) is rebuilt, answers questions about a pull and about selected lines of its diff, no longer posts reviews to the host, and is harder to misuse.
+
+- **Questions are answered, not reviewed again.** A question about a pull was sent under the review's own instructions, so the model wrote the review a second time. Questions now have instructions of their own.
+- **Ask about selected lines.** Select lines in a file's diff and press **Ask about these lines**: the question and its answer sit under that file, and join the pull's thread with the lines quoted. The model gets the lines with their `+`/`-` signs, the path and the line numbers. This needs a finished review of the pull.
+- **A new box to ask in.** One box that grows with the question and names the model that answers; **Enter** sends (it was Ctrl+Enter), **Shift+Enter** starts a new line. The question shows at once with the wait counted under it, and an empty thread offers three questions to start from.
+- **Reviews are no longer posted to the host.** The **post to GitHub** control and the **auto-post** column are gone, and a repository that had auto-post ticked no longer posts anything. The `…/review/post` route remains for scripts.
+- **A review lands on the pull it was asked for.** A review started on one pull could show on whichever pull was open when it finished. Each opened pull now keeps its own state, the list marks a pull as *model reviewing*, and its page shows the review when it lands.
+- **A new look for the page.** Tabs for pull requests, issues and setup; an opened pull takes the whole page, with checks, merge state, reviewers and changes in a rail beside it; rows say their state with signals in place of pills; filters, the drafts switch and the order sit in one bar, each filter a chip that names its value once set.
+- **Ignore pulls that are always there.** The eye on a row puts a pull out of the list and its counts; the **Ignored** switch shows them again. Kept in the browser, per host.
+- **Images in a description.** GitHub attachments show in place, fetched through the gateway, including those of private repositories; other images are linked by name. Raw `<img>` and `<br>` tags in a description are read as what they mean.
+- **Back, Forward and links.** The view, a plugin's tab, an opened pull and an expanded issue are in the address, so the browser's Back and Forward move between them and a copied address opens the same place.
+- **Security.** The admin page runs only its own script, named by hash in its content security policy, and cannot be framed. Links from a host or a model open only if they are http(s). An approval or change request is refused for a commit the model did not read, and is pinned to that commit on GitHub and GitLab. At most two reviews run at once. Diffs from Gitea and Bitbucket are read up to a cap, Bitbucket's next-page address is followed only back to its API, and Slack messages escape titles and model text.
+
+## 4.3.21 · 2026-11-12
+
+Extension: the grey suggestions in the chat composer work the way a mail composer's do, show when they are being written, and have settings of their own.
+
+- **Suggestions from the first message, in the middle of a word too.** A short pause anywhere in a message asks a model for the rest of it. Until now it was asked only once a conversation had a reply, only after a space, and after a longer pause, so in practice it rarely showed. A word left half typed is finished as part of the sentence ("how do I cen" → "ter a div?"), and nothing is offered once a sentence has ended.
+- **Three dots while a suggestion is being written.** They sit after the cursor from the moment the model is asked until its guess shows.
+- **Composer settings.** The text-size button beside Send opens a sheet like the agent's: suggestions off, words only, sentences only or both; which provider and model writes the sentences, the chat model unless another is picked; and the size of the text typed, 12 to 16px. Under the model it says which one is asked and how the last ask went: how long it took, that it gave nothing usable, or why it failed. A choice made there takes the place of `twinny.chatSuggestions`.
+- **The next word is no longer guessed.** After a space the composer used to offer the word that most often followed the last one. It was noise beside a sentence; words already begun are still finished.
+- **Fixed: a suggestion could repeat the whole message.** A model that mended a typo while reading the draft back had its entire reply shown as the suggestion. The suggestion is now placed by the draft's last words, and dropped when it cannot be placed.
+
+## 4.3.20 · 2026-11-11
+
+Extension: completions from a local model come back sooner, most of all on slower hardware.
+
+- **The model's server reuses more of each completion prompt.** A local server keeps its work on a prompt for as long as the next one begins the same way. The window of code before the cursor used to slide down a line with every new line typed, so each new line had the whole prompt read again; it now moves in steps of about twenty lines. Context files keep their order from one request to the next, and the definitions shown with a completion stay while the cursor is in the same part of a file, where they used to change line by line. With CodeLlama 7B on an RTX 3090 Ti, reading the prompt on a new line went from about 185 ms to 30 ms; on a laptop or a CPU the same saving is seconds. llama.cpp is now told to keep its prompt cache (`cache_prompt`), for servers too old to do so unasked.
+- **The next completion is ready when you accept one.** While a suggestion is on screen, the model is asked for the completion on the line after it. Accept the suggestion, or type it out, press Enter, and the next one shows at once, without the pause and the wait for the model. It is dropped the moment you go somewhere else. Only local model servers (Ollama, LM Studio, llama.cpp) are asked ahead of time, never a hosted API or a team gateway. Turn it off with `twinny.prefetchNextCompletion`.
+
+## 4.3.19 · 2026-11-10
+
+`twinny-server` release: a Personal licence holds the gateway to its one key, in place of the free five; removing it brings the five back. A licence that does not expire says "for good" instead of a date.
+
+## 4.3.18 · 2026-11-10
+
+Extension and `twinny-server`: agent mode gets more out of small local models, the chat follows a reply as it is written, the sidebar has a softer look, and the gateway has fixes from an audit.
+
+- **Long conversations fit the model's context.** When a conversation outgrows the context the model is loaded with, its oldest turns are folded into a few lines at the start, so the system prompt, the tools and the newest turns reach the model whole. Until now the server cut the conversation itself, and a local model at the end of a long chat lost the task it had just been given. Folding goes in blocks, so the start of the conversation stays the same for several turns and a local server keeps its cache of it. Plain chat is fitted the same way.
+- **Reads sized to the context.** `read_file` returns as much of a file as the context has room for (150 lines at 8k, up to 500 at 32k and above) in place of 150 lines whatever the model, so a file is read in one request more often. Where a read stops, it lists what is defined further down with line numbers, so the next read goes straight there.
+- **Trimmed results leave a digest.** When old tool results are trimmed to make room, a read keeps what it read and what is defined there, a search keeps where it matched, and a command keeps how it ended. Short results, such as an edit made, are no longer trimmed at all.
+- **`edit_file` does more in one call.** `replace_all` changes every place the text is; `edits` takes a list of changes to one file; `start_line` and `end_line` rewrite lines by number, refused with the current lines when the file changed since it was read. A finished edit returns the lines as they now are, so the next edit needs no read. An edit to a file the model has not read, with text that is nowhere in it, gets the file back in place of advice.
+- **A task list for longer work.** The model can keep a list of steps with `update_tasks`. It shows in the reply, ticked off as it goes, and is put back in front of the model when a reply runs out of steps or the next turn begins. Turn it off with `twinny.chatToolsTasks`.
+- **A record of what a reply did.** The edits, files and commands of a reply are kept as a short list: it is given to the model when a reply runs out of steps, so its summary matches what happened, and it heads the notes the next turn starts from.
+- **Tool calls written in a code block are run.** A model without native tool calling that writes its call inside an ordinary fenced block, instead of the format it was asked for, used to end the reply with nothing done. The call is now read from the block when it names a known tool.
+- **Fixed: the chat not following a reply as it is written.** The transcript fell behind during long code blocks and jumped back up when the reply ended. It now stays at the end until you scroll up, and stays where you are once you do.
+- **The chat says what the model's server knows, before you send.** The composer's footer shows a gauge once the conversation and the draft take a quarter of what the model is loaded to hold, says so from 80%, and warns when the message will not fit. When a local model is not in memory, a **Load model** button loads it in the background so the first reply does not wait; Ollama and LM Studio say whether it is.
+- **A first screen with something to do.** The empty chat shows the context the model is loaded with and whether it is in memory and on the GPU, and offers three first questions (**Explain this file**, **Find bugs**, **Write tests**) about the open file or the selection, cut to what the model's context holds.
+- **A softer sidebar.** Rounded corners and filled surfaces in place of outlined boxes across the chat, providers, history and embeddings tabs: user messages are a soft block, code blocks and approvals are cards, the composer is a rounded field with a solid send button, and tool steps are easier to read.
+- **A livelier Overview on the admin page.** Each tile shows how the period compares with the one before and draws its days as a line. The chart switches between requests, tokens and failures, and pointing at a day shows who asked, how many failed, the tokens and the average latency. The usage API gains per-day failures, tokens and time, and `compare=previous` for the totals of the period before.
+- **Fixed: a refused WebSocket upgrade could stop `twinny-server`.** A caller that reset the connection while its upgrade was being refused ended the process; no key was needed.
+- **Fixed: stalled requests holding the gateway's request slots.** A request whose body never arrived, or whose reader stopped reading, was not ended by the request deadline and kept its slot.
+- **Fixed: demo keys joining the team pool.** A demo's visitor and guest keys can no longer connect as a shared computer.
+- **Fixed: `limits.maxOutputTokens` bypassed by a `maxTokens` of zero or less.**
+- **Fixed: a removed review model stopping the gateway.** A review alias that no longer exists falls back to the first chat model, and background reviews that fail are logged. A failed automatic review is tried once per commit, not every minute.
+- **Other gateway fixes.** A bad `since` on the audit and recordings lists answers 400; request metrics no longer grow a series per unknown model name; the SSO landing page shows provider errors as text, and one address cannot fill the sign-in list; GitLab notes cannot run quick actions such as `/approve`; backups leave out shared-context clones and skip paths too long for an archive; GitHub issues are found on repositories with many open pull requests; developers post a triage reply once.
+- **Supporting twinny means buying a licence.** The READMEs, the GitHub sponsor button and the [Support twinny](https://docs.twinny.dev/reference/support/) page point to [twinny.dev's pricing](https://twinny.dev/#pricing) in place of donation addresses.
+- **A Personal licence: $29 once.** One person gets policy, recording and plugins on their own gateway, with one key that works on all their machines, for good. Gateways from 4.3.19 hold a Personal licence to that one key. Buy it at [twinny.dev](https://twinny.dev/#pricing); see [Licensing and seats](https://docs.twinny.dev/teams/licensing/).
+
+## 4.3.17 · 2026-11-09
+
+Extension and `twinny-server` release: current models for hosted providers, completions no longer cancelled by twinny's own log, and two fixes to the GitHub plugin page.
+
+- **Current models for hosted providers.** fluency.js 1.0.33 brings the model lists up to date, so current Gemini models, Mistral Large 4 and Claude Haiku 5.5 are accepted; until now twinny refused them before any request was sent ([#546](https://github.com/twinnydotdev/twinny/issues/546)). Retired model names are no longer accepted: a provider saved with one shows "Invalid 'model' field" and needs a model picked from the list.
+- **Fixed: hosted presets defaulting to retired models.** New providers start with `claude-sonnet-5-5` (Anthropic), `gemini-3.8-flash` (Gemini), `deepseek-flash` (DeepSeek), `command-a-plus-05-2026` (Cohere) and `sonar` (Perplexity) ([#547](https://github.com/twinnydotdev/twinny/issues/547)).
+- **Fixed: completions cancelled while the twinny log is open.** With the Output panel showing twinny's log, each debug line written during a request asked for a completion in the panel and cancelled the one in the editor, so suggestions rarely appeared with debug logging on ([#559](https://github.com/twinnydotdev/twinny/issues/559)).
+- **Fixed: the pull request table's open link hidden off to the right.** Long branch names made the table wider than the page, so it scrolled sideways even on wide screens and the **open ↗** column was cut off. Branch names now wrap, and the last column of the pull request and issue tables stays in view when a narrow window still makes them scroll.
+- **Fixed: "waiting for me" empty after an expired GitHub token.** One sync with a refused token made the GitHub plugin stop asking for reviewers and approvals on that repository until the server restarted, so after the token was replaced, "waiting for me" matched nothing and the approval counts were gone. Only a host that refuses the reviewer detail itself is now listed without it.
+
+## 4.3.16 · 2026-11-03
+
+Extension and `twinny-server` release: `twinny-server` starts without `--config`, its admin page and start-up screen are redone, and three fixes to the embeddings index were contributed by [@DivyamTalwar](https://github.com/DivyamTalwar).
+
+- **`twinny-server` on its own starts the gateway.** Without `--config` it uses the first configuration it finds: `$TWINNY_CONFIG`, then `./twinny.gateway.json`, then the one it served last (remembered in `~/.twinny/twinny-server.json`), then `~/twinny.gateway.json`. If it finds none and is run in a terminal, it runs setup and then serves. A configuration with no admin key runs setup to make one. Run outside a terminal, it lists the places it looked and exits with code 2, without writing anything. `--port`, `--host` and `--demo` work without `serve`, and `serve` and the admin commands (`keys`, `usage`, `license` and the rest) use the same lookup. `quickstart` and `reset` still use the current directory. If the configuration it found is broken, the error names the file and says why it was chosen ([#562](https://github.com/twinnydotdev/twinny/pull/562)).
+- **A clearer start-up screen.** In a colour terminal the banner shows the admin URL, models and access first, then limits and paths, and how long each backend took to answer. Request lines in the log are shorter. Output to a file or pipe is unchanged except for a new `config:` line naming the file in use.
+- **A new look for the admin page.** Black surfaces, rounded cards, pill badges and sentence-case labels, in Geist at 14px with IBM Plex Mono for code. Both fonts are embedded in the page. twinny green marks live status, links, focus and the selected item. Plugin logos keep their brand colours.
+- **Fixed: one workspace's index showing up in another.** Folders with the same name, or names that sanitize to the same string, shared one embeddings database. Each index is now keyed by the workspace's full URI and its set of root folders, and kept in VS Code's storage for that workspace. Old indexes are left on disk but not reused, so each workspace is indexed once more after updating. Results from a folder that is no longer in the workspace are dropped before reranking ([#555](https://github.com/twinnydotdev/twinny/pull/555)).
+- **Fixed: emptied files stayed searchable.** Saving an indexed file with nothing in it now removes its chunks from the index, as a full indexing run already did ([#554](https://github.com/twinnydotdev/twinny/pull/554)).
+- **Fixed: index saves failing with `ENOENT`.** Index manifest saves made at the same moment shared one temporary file. They now queue, each with a temporary file of its own ([#556](https://github.com/twinnydotdev/twinny/pull/556)).
+
+## 4.3.15 · 2026-10-16
+
+Extension release: a reworked sidebar, agent mode that can be steered while it works, and better handling of small local models.
+
+- **The sidebar reads like VS Code.** Replies, labels, buttons and settings use VS Code's own UI font. Code blocks, inline `code`, file paths, commands, model names and tool steps stay in the editor's monospace, so code stands out from the prose around it. Lowercase text has no extra letter-spacing, and headings in replies are no longer forced into lowercase.
+- **A quieter transcript.** Your messages keep a rule down their left edge, replies run flush beneath them, and whitespace separates the turns instead of a line under every message. The "you" and "twinny" labels are gone, and their row with them; they remain for screen readers. The copy, edit and regenerate actions appear on hover: on your message just above it, and on a reply at the end of its footer line. The footer stays on one line, with the token count moved into the speed figure's tooltip. The input is a framed field lined up with the provider and model row beneath it.
+- **Greyscale throughout.** Primary buttons, the active provider, running tool steps, a waiting command, the selected mention and the sliders no longer use the theme's blue; they use the foreground greys. Provider logos in the preset gallery are greyscale too. Focus outlines keep VS Code's focus colour.
+- **Fixed: code highlighting in light themes.** Code in replies and tool steps was coloured for a dark background whatever the theme, so parts of it nearly vanished on a light one. Highlighting now follows the active theme, switches with it without a reload, and treats high-contrast themes by their background.
+- **Fixed: `&#x2F;` in the Review tab.** Branch names and other values with a `/` showed as HTML entities.
+- **Fixed: history titles cut off mid-letter.** Long titles end in an ellipsis and use the row's full width. A preview that only repeats the title is left out.
+- **Tidier tabs.** The team cards in Providers have padding and outlined buttons, provider cards show their test, edit, copy and delete buttons on hover or keyboard focus, the template checkboxes sit closer together, the jump-to-latest arrow floats centred over the transcript, and English labels use sentence case and the lowercase "twinny".
+- **Steer the agent mid-reply.** A message you send while an agent reply is working is read by the model at its next step, rather than waiting until the reply ends. In the queue above the composer it shows as **next step**. Once the model has read it, it appears in the reply's steps as **you** at the point where it was read, and later turns remember it. If the model finishes first, the message goes as your next turn, as before. A message with `@` mentions or images still waits for its own turn, where those are added.
+- **30 tool steps per reply by default, up from 12.** A change across a few files (search, read each, edit each, check) takes 15 to 25 steps, so 12 ran out halfway. A model going round in circles is now stopped after three repeats, long before the cap. The agent settings offer 12, 20, 30 and 40 (`twinny.chatToolsMaxSteps`, 4 to 40). A number you already set is kept.
+- **Continue after running out of steps.** A reply that used every tool step (`twinny.chatToolsMaxSteps`) is marked **out of steps** in its footer, with a **Continue** button. Continue sends the agent back to the task with a fresh set of steps and what its tools found so far, rather than asking it to finish a sentence.
+- **Edit misses show the nearest lines.** When `edit_file`'s `find` is not in the file because a line or two was remembered wrong, the model gets the closest lines as they are now, numbered, and the first line that differs, so its next try lands without reading the file again. A block that only looks alike, such as a sibling function, is not offered as the place to edit. Every miss also says how to add new code: anchor on existing lines in `find` and repeat them with the new code in `replace`. Small models often put the new code itself in `find`. In live runs, gemma3:4b went from 1 in 5 to 4 in 6 on a two-function file, and qwen3-coder stayed at 7 of 7 on the edit tasks.
+- **Tool calls written loosely are mended.** Line breaks and tabs left raw inside strings (a whole file's content), escapes like `\d`, keys without quotes and trailing commas are fixed before a call is refused. This covers text-mode calls and native arguments passed on as written (llama.cpp, vLLM). A call that still cannot be read is quoted back to the model with the parser's message.
+- **No more going round in circles.** A read-only call (read, search, list, git, references) repeated with nothing changed since is not run again; the model is pointed at the result it already has. After three such repeats, or three unreadable calls in a row, the agent is asked for its answer instead of spending the rest of its steps.
+
+## 4.3.14 · 2026-10-15
+
+Extension release: a **DemonRoute** preset among the hosted chat providers, contributed by [@haterfactory](https://github.com/haterfactory) ([#545](https://github.com/twinnydotdev/twinny/pull/545)). It fills in `api.demonroute.com` over https with `/v1` and `shoukewei/Qwen3.8-27B-OBLITERATED22-AGENT` as the model; any model on your key can be picked instead. Chat only, no autocomplete or embeddings. Its description is translated into every language the sidebar ships.
+
+## 4.3.13 · 2026-10-15
+
+`twinny-server` release: the admin page's **Buy seats** link goes to [twinny.dev's pricing](https://twinny.dev/#pricing) instead of a Stripe link built into the gateway, so a change of price or checkout needs no new release. Team seats are now $15 a seat a month, billed yearly.
+
+## 4.3.12 · 2026-10-15
+
+Extension release: a **ChatGPT Plan** provider, contributed by [@CoderLambert](https://github.com/CoderLambert) ([#540](https://github.com/twinnydotdev/twinny/pull/540)). `twinny-server` refuses the new provider kind, which needs the editor, and masks more secrets in its logs.
+
+- **ChatGPT Plan provider.** Completions and chat on the models your ChatGPT account can use, without an API key. Pick **ChatGPT Plan** in the provider presets, **Sign in** opens ChatGPT's sign-in in the browser, and the model list fills from your account. The sign-in is kept in VS Code's secret storage and survives restarts; **Sign out** ends it and stops any request in flight. A **Reasoning effort** setting (model default, none to maximum) trades answer quality for speed; lower is better for completions. Requests go to OpenAI's public Responses API with `store: false`. Embeddings are not offered. Expect hosted latency for completions (about 2–4 seconds), not a local model's.
+- **Fixed: a credential the secret shield put back into a reply could be written to the log.** Log lines now go through the shield's secret detection too, in the extension's output channel and `twinny-server`'s stderr.
+
+## 4.3.11 · 2026-10-15
+
+Extension and `twinny-server` release: completions work against `llama-server` in router mode.
+
+- **Fixed: completions failed against `llama-server` in router mode** with `400 model name is missing from the request` ([#544](https://github.com/twinnydotdev/twinny/issues/544)). A llama.cpp completion request (and the warm-up before it) now names the provider's model, which the router uses to pick the model. A single-model server ignores it, and a provider with no model name set sends none, as before.
+- **The chat's context size is read from a router-mode `llama-server` too**, by naming the model when asking for its properties. Asking does not load the model.
+
+## 4.3.10 · 2026-10-15
+
+Extension release: `@` mentions in the chat composer list matches as you type, and `@symbol` mentions attach the symbol. `twinny-server` carries the version number only.
+
+- **Matches as you type after `@`.** Typing after `@` (`@useSugg`) lists every match straight away, files, symbols and `@workspace`/`@problems`/`@git`/`@terminal` together, each with its category's icon. A bare `@` still opens the category menu.
+- **Fixed: an `@symbol` mention attached nothing.** Picking a symbol kept its display text (`function · src/app.ts:12`) instead of the symbol it names, so the symbol's code never reached the model. It now carries the file, line and name.
+- **Fixed: clicking an `@symbol` mention in a sent message did nothing.** It now opens the file at the symbol's line.
+
+## 4.3.9 · 2026-10-14
+
+Version number only; no changes from 4.3.8.
+
+## 4.3.8 · 2026-10-14
+
+Extension and `twinny-server` release: agent mode's changes can be undone from the reply, it follows the project's `AGENTS.md`, it sees the errors its edits cause, and a team's admin can set what it may do. Also a round of fixes from an audit of agent mode, two of them security fixes to the `git` tool.
+
+- **Undo what a reply changed.** Agent mode applies edits straight away, so a reply that changed files now ends with the list of them: `3 files changed +24 −7`, each file with its own counts and whether it is new or deleted. Click a file to see it beside what it was before the reply. **undo** puts one file back, **undo all** every file. Undo goes through the editor, so the editor's own Undo brings the agent's change back again. A file changed since the reply ended (by you or a later reply) is only put back if you say so. Edits, new files, deletes, moves and renames are covered, and so, inside a git repository, are files a command the agent ran changed (a formatter, a codemod, `sed -i`): the working tree is read before and after each command through a copy of git's index (about as long as `git status` takes in that repository), so your staging is untouched and ignored files never appear. Copies are kept in the workspace's storage for the last 50 replies.
+- **Agent settings in the chat.** With agent mode on, a gear beside the agent switch opens what agent mode may do: whether changes apply or wait for review, whether commands ask, run or are off (the same as the auto-run switch), whether they run in the background or the terminal, how many steps a reply may take (8, 12, 20 or 30; new setting `twinny.chatToolsMaxSteps`, 12 by default), and forgetting the commands set to always run. Each writes your own `twinny.chatTools…` settings. A rule your team sets shows and cannot be loosened there.
+- **MCP servers in agent mode.** Name Model Context Protocol servers in `twinny.chatToolsMcpServers` (a command, its arguments and environment), and their tools join agent mode. A server starts with the first agent reply and stops with the chat; it runs on this machine over standard input and output (no HTTP servers yet). Each call shows in the steps with **Run**, **Always run** (that tool, whatever its arguments) and **Skip**, because nothing a server does can be undone from the reply. A team whose rules take commands away takes MCP servers away too, one that asks before every command asks before every tool call, and **Policy → Agent mode → MCP servers** turns them off on their own. With no servers set, nothing changes: agent mode's prompt and tools are as before. The agent settings panel says how many servers are set and links to the setting.
+- **The agent sees the errors it causes.** After an edit is applied, the result the model gets names the errors the editor now reports in that file that were not there before (up to five), so it can fix its own mistake without spending a step asking. The step's line says `· 1 new error`. Warnings are left out. In a file that was not open before the edit, only errors on the lines it changed are named, so the file's old errors are not blamed on it.
+- **`AGENTS.md` is followed.** The project's `AGENTS.md` at the workspace root (or, without one, `CLAUDE.md` or `.github/copilot-instructions.md`) goes into agent mode's instructions. A folder's own `AGENTS.md` comes along the first time the agent works in that folder, and wins over the root's where they differ. The reply's footer names the files followed; click to open them. Changes to an `AGENTS.md` are always shown for review.
+- **Team rules for agent mode.** On the gateway's admin page, **Policy → Agent mode** (or `policy.agent` in the configuration, with the `policy` licence feature): turn agent mode off for the team, make every command ask (auto-run and Always run then do nothing) or take commands away, make every change wait for review, and list paths the agent may not list, read, search, see in git or change. The rules only tighten a developer's own settings, are shown on the consent card, and reach developers at their next agent reply. An extension too old to know the rules is refused agent requests while the team sets any (with a message to update twinny or switch agent mode off); its plain chat and completions carry on.
+- **A finished command can be copied or put in your terminal.** A command step the agent ran has a copy button and a terminal button: the command lands in your terminal to look at or run again, and nothing runs until you press Enter.
+- **Fixed: the `git` tool could read files outside the workspace.** A path outside the repository made `git diff` compare any two files on the machine, and abbreviated options (`--conten` for `--contents`) or `--ignore-revs-file` read any file. Paths outside the workspace are refused wherever they appear, an option is refused by any start of a refused name, and the files-by-id route is closed too.
+- **Fixed: the `git` tool could show files `.gitignore` hides when git still tracks them**, by object id (from `ls-files -s`), by staged path (`:0:path`), by a path with `./` or `..` in it, or with `--relative`. `ls-files` output leaves hidden files out, and `status --ignored` is refused.
+- **Fixed: a command that left something running in the background never finished.** `npm start &` or a server started by a script kept its step spinning for ever, and its stop button did nothing. The step now ends when the command does, and what it left running is ended with it (the model is told). A command that ignores `SIGTERM` is killed when its time runs out, and running commands end when the chat closes.
+- **Fixed in edits:** code that only looks like `read_file`'s line numbers (`404: "Missing"`, YAML ports) is no longer stripped from an edit, and an edit that removes whole lines no longer leaves a blank line behind.
+- **Fixed in replies:** an answer that mentions `<tool_call>` tags is shown as an answer, not treated as a broken call; text held back in case it began a call (a closing code fence) is shown when the calls come natively; on the last step a stray call is left out and the answer after it kept; calls made together share the context, so their results are not trimmed before the model reads them; call arguments under `args`, `input` or `params` reach the tool; and a reply that ends on an edit waiting for review says so instead of "ran out of tool steps".
+- **Fixed in the chat:** starting a new conversation, or opening another, while an agent reply is running stops the reply instead of letting it land in the conversation you moved to. `Shift+Enter` on an empty composer no longer applies a waiting delete or move. Every thinking block in an agent reply is hidden, not only the first. A tool step no longer lands inside a code block, or jumps to the end of the reply, when the model wrapped its call in a fence. A reply that failed after its tools ran is no longer labelled stopped, and its tools' notes still go with your next message.
+- **Fixed in safety rules:** `.vscode/` and `.gitignore` are protected in any letter case (as macOS and Windows treat them), `*.code-workspace` files are protected like `.vscode/`, a link is judged by where it leads as well as by its name (and a new file is not written through a link whose target is missing), and deleting a file marked skip-worktree or assume-unchanged asks first, since git cannot vouch for it.
+
+## 4.3.7 · 2026-10-07
+
+`twinny-server` release: access tokens for the GitHub, GitLab, Gitea and Bitbucket plugins are saved once and shared, so an expired token is replaced once. The extension carries the version number only.
+
+- **Tokens are saved once, for any number of repositories.** Each repository used to keep its own copy of the token pasted with it, so an expired token meant removing and re-adding every repository. A plugin page now has a **Tokens** panel: save a token once, then each repository reads with one of the saved tokens, picked in its **reads with** column. That covers one classic token for everything, a fine-grained token per organisation, and a token per repository. The add form offers the token most repositories already use, and saving a token can list the repositories it reads so you can tick several and watch them in one go.
+- **One replace for an expired token.** **Replace** checks the new value with the host first, then every repository on that token syncs with it. When the host refuses a token (401), the token and each repository on it say so, and the token's **replace** button is highlighted.
+- **Existing setups move over by themselves.** On first start, tokens stored per repository in `repos.json` are folded into saved tokens. The same value pasted for many repositories becomes one token. Repository ids stay the same, so reviews and triage are kept. An older version cannot read saved tokens: rolled back, it reports its repositories as having no token, and the first change it saves drops the saved tokens from `repos.json` for good. Keep a backup of the file before rolling back.
+- API: `POST api/tokens`, `PUT api/tokens/<id>` (`token`, `label`), `DELETE api/tokens/<id>`, `GET api/tokens/<id>/repos`, `tokenId` on `POST api/repos` and `PUT api/repos/<id>`. Developers a plugin is shared with never see the tokens.
+
+## 4.3.6 · 2026-10-06
+
+Extension release: the chat composer suggests how to finish what you are typing. `twinny-server` release: sign-in's per-address limit works behind a reverse proxy.
+
+- **Grey suggestions in the chat composer.** As in the editor, a suggestion shows in grey after the cursor: **Tab** accepts it, **Ctrl+→** accepts one word of it, and **Esc** puts it away. From the first key it finishes the word you are typing, or guesses the next one after a space, from your own earlier prompts, as a phone keyboard does. Once the conversation has a reply, a short pause after a word asks the chat model for the rest of the message given the last three exchanges, so the suggestion follows the conversation. Nothing is asked of the model while a reply is coming. `twinny.chatSuggestions` turns it off.
+- **Gateway: sign-in requests are counted per developer behind a proxy.** `POST /twinny/v1/signin` allows five waiting requests per client address, and took the address from the connection. Behind nginx or Caddy on the same machine, as `docs/gateway.md` describes, every developer arrives from the proxy's loopback address, so the whole team shared five, and one client could hold sign-in shut for everyone for ten minutes. It now takes the forwarded address, by the rule the audit log already follows: `X-Forwarded-For` is believed only from a loopback peer.
+
+## 4.3.5 · 2026-10-02
+
+Extension release: settings, labels and a command that did not do what they said. `twinny-server` carries the version number only.
+
+- **Edit twinny templates runs.** The command was in the command palette but was never registered, so choosing it failed with "command 'twinny.templates' not found". It now opens `~/.twinny/templates` in a new window, as **Open template editor** under **Manage twinny templates** does.
+- **Chilean Spanish is used when chosen.** The sidebar registered the `es-CL` translations under the key `esCL`, so `twinny.locale` set to `es-CL` fell back to the general Spanish ones. The two differ in one string today. The setting's description also called it Spanish (Colombia); it is Spanish (Chile).
+- **`twinny.numPredictChat` is gone.** Nothing has read it since 3.21: chat requests set no length limit of their own, so the provider's default applies. Removing it changes no reply.
+- **`twinny.temperature` says what it covers.** It applies to code completions only; chat, inline edit and code review in the extension send no temperature, so the server's default applies. The description implied all of them.
+- **The Stop button over an inline edit names the right key on macOS.** It showed `⌘⇧/`; the binding is `Ctrl+Shift+/` on every platform (`⌘⇧/` is macOS's Help search), so it now shows `⌃⇧/`.
+- **The gateway preset names `twinny-server`.** Its description in the Providers tab said the gateway is run with `twinny-node serve`.
+- `docs/gateway.md` documents `policy.secretShield`, the READMEs list agent mode, and `docs/providers.md` points to the provider pages on docs.twinny.dev instead of setup from 3.x that no longer matched the presets.
+
+## 4.3.4 · 2026-10-02
+
+Extension release: the chat's provider and model dropdowns open again. `twinny-server` carries the version number only.
+
+- **The provider and model dropdowns open again.** In 4.3.2 the chat footer's dropdowns were made to fit a narrow panel, and that change hid their lists, so clicking one did nothing. The lists open again, and long names are still cut short in a narrow panel.
+
+## 4.3.3 · 2026-10-02
+
+`twinny-server` release: Recordings folds an agent conversation's steps into one row, and the tests no longer touch the real data directory. The extension carries the version number only.
+
+- **Recordings: one row per conversation.** Agent mode sends the conversation again for every tool step, and every step was its own row in **Recordings**, so one reply could fill the list with a dozen near-identical entries. Now the steps and later turns of a chat fold into one row with a step count, wherever they fall among other requests. Opening it shows the whole conversation, and the caret lists each step. ↑ ↓ move between rows as shown. Storage is unchanged: each step is still its own record, and the training export still has one example per step. Records kept before this are grouped the first time the gateway opens them.
+- **Recordings: the preview is the question.** A follow-up's preview showed the tool notes the extension sends ahead of it, as JSON. It now shows the question the developer asked.
+- **Tests no longer touch the real data directory.** The gateway tests' CLI processes run with a scratch home, so a full test run no longer removes `~/.twinny/server/recordings`.
+
+## 4.3.2 · 2026-10-02
+
+Extension release: agent mode's steps show inside the reply, commands run in the background with their output in the chat, and commands can be approved from the keyboard. `twinny-server` carries the version number only.
+
+- **Steps show where they happened in the reply.** Before, every tool step sat in one block above the reply, so a command waiting for Run was above the text you were reading. Now the reply reads in order: what the model said, the tool it used, what it said next. A command waiting for you is at the bottom, where you are already looking. Conversations saved earlier show their steps at the top, as before.
+- **Commands run in the background, with their output in the chat.** A command the model runs no longer opens the **twinny tools** terminal. It runs through `bash` from the workspace root, and its output appears in its step as it prints. Nothing can answer a prompt, and a command is stopped after two minutes, so interactive commands, servers and watch modes belong in a terminal. Set `twinny.chatToolsCommandsRunIn` to `terminal` to run them in the terminal as before.
+- **An auto-run switch.** With agent mode on, an **auto-run** switch next to the agent switch lets every command run without asking. Until you first flip it, `twinny.chatToolsCommands` decides, so commands still ask by default.
+- **Always run, one command at a time.** A waiting command now has **Always run** between Run and Skip. It runs the command and remembers that exact command, so the model can run it again without asking; any other command still asks. **Twinny - Forget commands set to always run** clears the list.
+- **Approve from the keyboard.** When a command or change is waiting and the composer is empty, `Enter` runs or applies it, `Shift+Enter` always runs it, and `Esc` skips it. A second `Esc` still stops the reply.
+- **Stop one command, not the whole reply.** A running command has a stop button on its line. It ends that command and anything it started; the model gets the output so far, is told you stopped it, and carries on.
+- **Model names fit in the composer footer, and nothing overlaps in a narrow panel.** The provider dropdown takes only the room it needs, and the model's name gets the rest. As the panel narrows, "? for shortcuts" shrinks to "?", the agent switch drops its key hint, auto-run keeps only its icon, and the placeholder is cut short on one line. The switches no longer run under the camera and send buttons, and the dropdown arrows no longer cover the names.
+
+## 4.3.1 · 2026-10-01
+
+Extension release: code in agent mode's steps wraps properly. `twinny-server` carries the version number only.
+
+- **Code in tool steps reads as code again.** A file the agent read, shown with line numbers in a narrow chat, broke every word into its own wrapped column. Long lines now wrap as text, under the code and clear of the line numbers.
+
+## 4.3.0 · 2026-10-01
+
+Extension release: agent mode switched from the chat, messages queued while a reply runs, terminal-style chat keys, and a fix for Anthropic tool calls. `twinny-server` carries the version number only.
+
+- **Messages sent while a reply runs are queued, not lost.** Pressing Enter while the model is answering, or working through tools in agent mode, used to clear what you typed without sending it. It now waits under the transcript, marked *queued*, and goes out when the reply ends, one message per reply. Hover a queued message to drop it. Stopping the reply (`Esc`, `Ctrl+C` or the stop button) puts queued messages back in the composer instead of sending them.
+- **Agent mode with Anthropic no longer fails after a tool with no arguments.** When Claude called a tool that takes nothing, such as looking at the editor, the next step failed with "Unexpected end of JSON input" before it was sent. Calls with no arguments now go back as `{}`; Bedrock, Gemini and Cohere had the same failure.
+- **Agent mode, one key away.** A switch at the bottom left of the chat's composer, or `Shift+Tab`, turns agent mode on and off: the model may then read, search and edit files and run commands in the workspace. The choice is kept for every window; until you first switch it, the `twinny.chatTools` setting decides. While it is on, the prompt turns to a bright `❯❯`, and it pulses while the model works.
+- **Chat keys, as in a terminal.** `Ctrl+C` stops a reply, or clears the draft when nothing is streaming; with text selected it still copies. `Esc` twice clears the draft, and `↑` brings a cleared draft back. `Ctrl+L` starts a new conversation, `PgUp` and `PgDn` scroll the transcript from the composer, and typing with the focus on the transcript goes to the composer. `Esc` and `Ctrl+C` stop a reply from anywhere in the chat, not only the composer. Press `?` on an empty composer for the list, or run **Twinny - Chat keyboard shortcuts** from the view's `…` menu.
+
 ## 4.2.10 · 2026-09-30
 
 Extension release: twinny starts in WSL again, and the Embeddings tab holds still while indexing.

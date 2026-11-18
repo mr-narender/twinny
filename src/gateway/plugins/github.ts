@@ -1,13 +1,14 @@
 /**
  * The GitHub plugin: open pull requests of watched repositories, read
- * with a repository token or, once one is set up, a GitHub App.
+ * with a saved token or, once one is set up, a GitHub App.
  *
  * A GitHub App is the tidier way for a team: install it on the
  * repositories once, paste its App ID and private key here, and every
  * repository it can see may be watched with no token of its own. The
  * gateway signs a short JWT with the key, swaps it for an installation
- * token (an hour, cached) and reads with that. Tokens work too, per
- * repository, for a quick start or a personal account.
+ * token (an hour, cached) and reads with that. Tokens work too, for a
+ * quick start or a personal account: a classic token saved once reads
+ * every repository, a fine-grained one the repositories it was given.
  *
  * Host-specific routes under api/:
  *   PUT    app { appId, privateKey }  → checks the key against GitHub, keeps it
@@ -22,7 +23,7 @@ import { createSign } from "node:crypto"
 import { noAnswer, timeoutSignal } from "../../common/deadline"
 import { messageOf } from "../../common/errors"
 
-import { arr, baseUrlOf, CheckState, cutPatch, Forge, IssueSummary, MAX_FILES, MAX_PULLS_PER_REPO, MergeState, num, PullApprovals, PullCheck, PullContent, PullFile, PullSummary, readJson, rec, RepoRecord, RepoStore, ReviewPostAs, ReviewState, rollup, str } from "./forge"
+import { arr, baseUrlOf, CheckState, cutPatch, Forge, ForgeImage, IssueSummary, isTokenRefused, MAX_FILES, MAX_LISTED_REPOS, MAX_PULLS_PER_REPO, MergeState, num, PullApprovals, PullCheck, PullContent, PullFile, PullSummary, readImage, readJson, rec, RepoRecord, RepoStore, ReviewPostAs, ReviewState, rollup, str } from "./forge"
 import {
   GatewayPlugin,
   json,
@@ -39,6 +40,8 @@ const USER_AGENT = "twinny-server"
 const JWT_TTL_S = 9 * 60
 /** Installation tokens live an hour; renew this long before the end. */
 const TOKEN_MARGIN_MS = 5 * 60_000
+/** GitHub signs an attachment's address for five minutes; a description is rendered again before that. */
+const BODY_IMAGES_MS = 3 * 60_000
 
 /**
  * The pulls query, with or without the reviewer detail. The detail asks
@@ -232,11 +235,21 @@ interface CachedToken {
   expiresAt: number
 }
 
+/** Pages of the issue list read to find a repository's issues among its pull requests. */
+const MAX_ISSUE_PAGES = 4
+
 export class GitHubForge implements Forge {
   private readonly _installations = new Map<string, number>()
   private readonly _tokens = new Map<number, CachedToken>()
   /** Repositories whose host refused the reviewer detail; listed plainly from then on. */
   private readonly _plainListing = new Set<string>()
+
+  /** Installation ids and tokens belong to the host that issued them: none is offered to another. */
+  public hostChanged(): void {
+    this._installations.clear()
+    this._tokens.clear()
+    this._plainListing.clear()
+  }
 
   public readonly noun = "Pull request"
 
@@ -415,6 +428,23 @@ export class GitHubForge implements Forge {
     return str(rec(await this.rest("/user", repo.token, signal, "Asking GitHub who the token is")).login) || undefined
   }
 
+  public async listRepos(token: string, signal: AbortSignal): Promise<string[]> {
+    const names: string[] = []
+    for (let page = 1; names.length < MAX_LISTED_REPOS; page++) {
+      const answer = arr(await this.rest(`/user/repos?per_page=100&sort=updated&page=${page}`, token, signal, "Listing what the token can read"))
+      names.push(...answer.map((entry) => str(rec(entry).full_name)).filter(Boolean))
+      if (answer.length < 100) break
+    }
+    return names.slice(0, MAX_LISTED_REPOS)
+  }
+
+  public tokenKind(token: string): string | undefined {
+    if (token.startsWith("github_pat_")) return "fine-grained"
+    if (token.startsWith("ghp_")) return "classic"
+    if (token.startsWith("gho_") || token.startsWith("ghu_")) return "OAuth"
+    return undefined
+  }
+
   public async checkRepo(repo: RepoRecord, signal: AbortSignal): Promise<string> {
     const token = await this.tokenFor(repo, signal)
     const answer = await this.rest(
@@ -441,12 +471,15 @@ export class GitHubForge implements Forge {
       try {
         data = await this.graphql(pullsQuery(true), variables, token, signal, what)
       } catch (error) {
-        if (signal.aborted || !(error instanceof PluginError) || error.status !== 502) throw error
+        if (signal.aborted || !(error instanceof PluginError) || error.status !== 502 || isTokenRefused(error)) throw error
         // The host would not answer the richer query (scopes, an older
-        // Enterprise); take what it gives and stop asking for more.
+        // Enterprise); take what it gives and stop asking for more. Only
+        // once the plain query has gone through: when both fail (the rate
+        // limit, an outage) the richer query was not the problem, and
+        // remembering it would hide approvals until the server restarts.
+        data = await this.graphql(pullsQuery(false), variables, token, signal, what)
         this._context.log.warn({ event: "plugin.github-plain-listing", reason: repo.fullName, message: error.message })
         this._plainListing.add(repo.id)
-        data = await this.graphql(pullsQuery(false), variables, token, signal, what)
       }
     }
     const repository = rec(data.repository)
@@ -458,6 +491,61 @@ export class GitHubForge implements Forge {
     return arr(rec(repository.pullRequests).nodes).map((node) =>
       toPull(repo.fullName, rec(node))
     )
+  }
+
+  /** Each description's images as GitHub renders them, kept for as long as its signed addresses last. */
+  private readonly _bodyImages = new Map<string, { at: number; images: Promise<Array<{ src: string; canonical?: string }>> }>()
+
+  /**
+   * The images in a description, from GitHub's own rendering of it. That
+   * is where an attachment on a private repository gets an address that
+   * can be fetched: a signed one, good for a few minutes.
+   */
+  private async bodyImages(repo: RepoRecord, number: number, signal: AbortSignal): Promise<Array<{ src: string; canonical?: string }>> {
+    const token = await this.tokenFor(repo, signal)
+    const response = await this._context.fetch(`${this.restUrl}/repos/${repo.fullName}/issues/${number}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github.full+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT },
+      signal
+    })
+    const html = str((await readJson(response, `Reading the images of ${repo.fullName}#${number}`)).body_html)
+    const attribute = (tag: string, name: string): string | undefined => {
+      const match = new RegExp(`\\s${name}\\s*=\\s*"([^"]*)"`, "i").exec(tag)
+      return match ? match[1].replace(/&amp;/g, "&").replace(/&quot;/g, "\"").replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : undefined
+    }
+    return (html.match(/<img\b[^>]*>/gi) ?? []).flatMap((tag) => {
+      const src = attribute(tag, "src")
+      const canonical = attribute(tag, "data-canonical-src")
+      return src ? [{ src, ...(canonical ? { canonical } : {}) }] : []
+    })
+  }
+
+  public async image(repo: RepoRecord, number: number, url: string, signal: AbortSignal): Promise<ForgeImage | undefined> {
+    const key = `${repo.id}:${number}`
+    let entry = this._bodyImages.get(key)
+    if (!entry || Date.now() - entry.at > BODY_IMAGES_MS) {
+      entry = { at: Date.now(), images: this.bodyImages(repo, number, signal) }
+      this._bodyImages.set(key, entry)
+      entry.images.catch(() => this._bodyImages.delete(key))
+      if (this._bodyImages.size > 200) this._bodyImages.delete(this._bodyImages.keys().next().value as string)
+    }
+    const images = await entry.images
+    // An attachment's signed address carries the same id as the one written in the description.
+    const asset = /\/assets\/([0-9a-f]{8}-[0-9a-f-]{27})(?:[/?#]|$)/i.exec(url)?.[1]
+    const found = images.find((image) => image.canonical === url || image.src === url) ?? (asset ? images.find((image) => image.src.includes(asset)) : undefined)
+    if (!found) return undefined
+    let target: URL
+    try {
+      target = new URL(found.src)
+    } catch {
+      return undefined
+    }
+    // GitHub's own hosts only, and never with the token: the signed address is the credential.
+    const own = new URL(this.baseUrl)
+    const onHost = target.host === own.host && target.protocol === own.protocol
+    const onGitHub = target.protocol === "https:" && (target.hostname.endsWith(`.${own.hostname}`) || target.hostname.endsWith(".githubusercontent.com"))
+    if (!onHost && !onGitHub) return undefined
+    const response = await this._context.fetch(target.href, { headers: { Accept: "image/*", "User-Agent": USER_AGENT }, signal })
+    return readImage(response, `Reading an image of ${repo.fullName}#${number}`)
   }
 
   public async pullContent(
@@ -516,13 +604,20 @@ export class GitHubForge implements Forge {
 
   public async listIssues(repo: RepoRecord, signal: AbortSignal): Promise<IssueSummary[]> {
     const token = await this.tokenFor(repo, signal)
-    const answer = await this._context.fetch(`${this.restUrl}/repos/${repo.fullName}/issues?state=open&per_page=${MAX_PULLS_PER_REPO}&sort=updated`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT },
-      signal
-    })
-    return arr(await readJson(answer, `Listing issues of ${repo.fullName}`))
-      .map((entry) => rec(entry))
-      .filter((issue) => !issue.pull_request)
+    // GitHub lists pull requests among the issues, so a page may hold few
+    // issues or none: a busy repository's are a page or two further on.
+    const found: Record<string, unknown>[] = []
+    for (let page = 1; page <= MAX_ISSUE_PAGES && found.length < MAX_PULLS_PER_REPO; page++) {
+      const answer = await this._context.fetch(`${this.restUrl}/repos/${repo.fullName}/issues?state=open&per_page=${MAX_PULLS_PER_REPO}&sort=updated&page=${page}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT },
+        signal
+      })
+      const entries = arr(await readJson(answer, `Listing issues of ${repo.fullName}`)).map((entry) => rec(entry))
+      found.push(...entries.filter((issue) => !issue.pull_request))
+      if (entries.length < MAX_PULLS_PER_REPO) break
+    }
+    return found
+      .slice(0, MAX_PULLS_PER_REPO)
       .map((issue) => ({
         repo: repo.fullName,
         number: num(issue.number) ?? 0,
@@ -583,7 +678,8 @@ export class GitHubForge implements Forge {
     const response = await this._context.fetch(`${this.restUrl}/repos/${repo.fullName}/pulls/${pull.number}/reviews`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": USER_AGENT, "Content-Type": "application/json" },
-      body: JSON.stringify({ body, event: as === "approve" ? "APPROVE" : as === "request-changes" ? "REQUEST_CHANGES" : "COMMENT" }),
+      // A verdict is pinned to the commit that was reviewed: a push in between leaves it there. A comment goes wherever the pull is.
+      body: JSON.stringify({ body, event: as === "approve" ? "APPROVE" : as === "request-changes" ? "REQUEST_CHANGES" : "COMMENT", ...(as !== "comment" && pull.headSha ? { commit_id: pull.headSha } : {}) }),
       signal
     })
     const answer = await readJson(response, `Posting the review on ${repo.fullName}#${pull.number}`)

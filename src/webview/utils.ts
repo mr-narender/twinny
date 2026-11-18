@@ -54,6 +54,8 @@ export const CustomKeyMap = Extension.create({
         if (mentionState && mentionState.active) {
           return false
         }
+        // An empty composer answers a command waiting on the user.
+        if (editor.isEmpty && this.options.approve?.("run")) return true
         this.options.handleSubmitForm()
         this.options.clearEditor()
         return true
@@ -63,15 +65,38 @@ export const CustomKeyMap = Extension.create({
         return true
       },
       "Shift-Enter": ({ editor }) => {
+        if (editor.isEmpty && this.options.approve?.("always")) return true
         editor.commands.insertContent("\n")
         return true
       },
-      // Stops a reply on its way, from where the user is already typing.
+      // Stops a reply on its way, from where the user is already typing;
+      // pressed twice with nothing running, it clears the draft.
       Escape: ({ editor }) => {
         const mentionState = MentionPluginKey.getState(editor.state)
         if (mentionState && mentionState.active) return false
-        return this.options.stopGeneration?.() ?? false
+        return this.options.escape?.() ?? false
       },
+      // As in a terminal: stop the reply, or clear the line. With text
+      // selected it stays a copy.
+      "Ctrl-c": ({ editor }) => {
+        if (!editor.state.selection.empty) return false
+        return this.options.interrupt?.() ?? false
+      },
+      "Ctrl-l": () => this.options.newConversation?.() ?? false,
+      // On an empty composer "?" asks for the shortcuts; anywhere else it
+      // is a question mark.
+      "?": ({ editor }) => {
+        if (!editor.isEmpty) return false
+        return this.options.toggleShortcuts?.() ?? false
+      },
+      // Agent mode on and off, where Claude Code switches its modes.
+      "Shift-Tab": ({ editor }) => {
+        const mentionState = MentionPluginKey.getState(editor.state)
+        if (mentionState && mentionState.active) return false
+        return this.options.toggleAgentMode?.() ?? false
+      },
+      PageUp: () => this.options.scrollTranscript?.(-1) ?? false,
+      PageDown: () => this.options.scrollTranscript?.(1) ?? false,
       // Earlier prompts, as in a shell: from an empty composer, or while
       // already stepping through them.
       ArrowUp: ({ editor }) => {
@@ -88,11 +113,16 @@ export const CustomKeyMap = Extension.create({
   },
 })
 
+/**
+ * A reply's thinking and its message. An agent reply is several requests
+ * in a row and a model may think before each, so every block is taken
+ * out, an unfinished last one included.
+ */
 export const getThinkingMessage = (content: string): { thinking: string | null; message: string } => {
-  const thinkMatch = content.match(/<(?:think|thinking)>([\s\S]*?)(?:<\/(?:think|thinking)>|$)/);
-  if (!thinkMatch) return { thinking: null, message: content };
+  const blocks = [...content.matchAll(/<(?:think|thinking)>([\s\S]*?)(?:<\/(?:think|thinking)>|$)/g)];
+  if (!blocks.length) return { thinking: null, message: content };
 
-  const thinking = thinkMatch[1].trim();
-  const message = content.replace(/<(?:think|thinking)>[\s\S]*?(?:<\/(?:think|thinking)>|$)/, "").trim();
+  const thinking = blocks.map((block) => block[1].trim()).filter(Boolean).join("\n\n");
+  const message = content.replace(/<(?:think|thinking)>[\s\S]*?(?:<\/(?:think|thinking)>|$)/g, "").trim();
   return { thinking, message };
 };

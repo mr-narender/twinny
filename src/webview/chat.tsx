@@ -10,29 +10,50 @@ import * as cheerio from "cheerio"
 import cx from "classnames"
 import { v4 as uuidv4 } from "uuid"
 
-import { ASSISTANT, EVENT_NAME, USER } from "../common/constants"
+import {
+  codeFontSizeOf,
+  composerFontSizeOf,
+  ComposerSettings as ComposerSettingsValue,
+  suggestionSourceOf
+} from "../common/composer-settings"
+import { ASSISTANT, EVENT_NAME, GLOBAL_STORAGE_KEY, USER } from "../common/constants"
+import { contextFit } from "../common/model-status"
 import {
   AnyContextItem,
   ChatCompletionMessage,
   ImageAttachment,
-  MentionType
+  MentionType,
+  ReplyChangesView,
+  ToolStepView
 } from "../common/types"
 
+import { useAgentMode } from "./hooks/useAgentMode"
+import { useAutoRun } from "./hooks/useAutoRun"
 import { useAutosizeTextArea } from "./hooks/useAutosizeTextArea"
+import { useComposerSuggestions } from "./hooks/useComposerSuggestions"
 import { useConversationHistory } from "./hooks/useConversationHistory"
+import { useModelStatus } from "./hooks/useModelStatus"
 import { useProviders } from "./hooks/useProviders"
 import { useSelection } from "./hooks/useSelection"
+import { StorageType, useStorageContext } from "./hooks/useStorageContext"
 import { useSuggestion } from "./hooks/useSuggestion"
+import { useToolSteps } from "./hooks/useToolSteps"
 import { useWorkspaceContext } from "./hooks/useWorkspaceContext"
 import { useWorkspaceSearch } from "./hooks/useWorkspaceSearch"
 import { ProviderSelect } from "./providers/provider-select"
+import AgentSettings from "./agent-settings"
+import ComposerSettings from "./composer-settings"
 import { EmptyChat } from "./empty-chat"
+import { GhostText } from "./ghost-text"
 import { createCustomImageExtension } from "./image-extension"
 import MessageItem from "./message-item"
-import { emit, useServerEvent } from "./messaging"
+import { bridge, emit, useServerEvent } from "./messaging"
+import { ModelState } from "./model-state"
+import { Shortcuts } from "./shortcuts"
 import { Suggestions } from "./suggestions"
+import { answerToolQuestion, answerToolStep } from "./tool-steps"
 import { conversationMarkdown } from "./transcript"
-import { CustomKeyMap } from "./utils"
+import { CustomKeyMap, getThinkingMessage } from "./utils"
 
 import styles from "./styles/chat.module.css"
 
@@ -40,6 +61,12 @@ const COMPOSER_MIN_HEIGHT = 44
 const COMPOSER_HEIGHT_KEY = "twinny.composerHeight"
 const PROMPT_HISTORY_KEY = "twinny.promptHistory"
 const PROMPT_HISTORY_LIMIT = 50
+/** Two presses of Esc this close together clear the draft. */
+const DOUBLE_ESCAPE_MS = 800
+/** Where a key belongs to whatever has focus, not to the chat. */
+const KEY_OWNERS =
+  "input, textarea, select, .ProseMirror, [contenteditable='true'], " +
+  "vscode-text-field, vscode-text-area, vscode-dropdown"
 
 const loadPromptHistory = (): string[] => {
   try {
@@ -50,12 +77,37 @@ const loadPromptHistory = (): string[] => {
   }
 }
 
+interface QueuedMessage {
+  id: string
+  /** As the composer had it, so it can go back there. */
+  html: string
+  /** As sent: paragraphs joined with line breaks. */
+  input: string
+  text: string
+  mentions: MentionType[]
+  images: ImageAttachment[]
+  /**
+   * Offered to the agent reply that is working, for the model to read at
+   * its next step; sent as a turn of its own if the reply ends first.
+   */
+  steer?: boolean
+}
+
+/** A message's text with its line breaks, as the agent is handed it mid-reply. */
+const steeringText = (input: string) =>
+  cheerio
+    .load(input.replace(/<br\s*\/?>/g, "\n"))
+    .root()
+    .text()
+    .trim()
+
 interface ChatProps {
   fullScreen?: boolean
+  active?: boolean
 }
 
 export const Chat = (props: ChatProps): JSX.Element => {
-  const { fullScreen } = props
+  const { fullScreen, active = true } = props
   const generatingRef = useRef(false)
   const editorRef = useRef<Editor | null>(null)
   const imagesRef = useRef<ImageAttachment[]>([])
@@ -69,6 +121,17 @@ export const Chat = (props: ChatProps): JSX.Element => {
   // until one is set; the empty transcript says where to set it.
   const { chatProvider, ready: providersReady } = useProviders()
   const chatDisabled = providersReady && !chatProvider
+  const model = useModelStatus(chatProvider, isLoading)
+  const [draftChars, setDraftChars] = useState(0)
+  /** The conversation as the server last counted it; before any count, its length. */
+  const conversationTokens = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const meta = messages[i].meta
+      if (meta?.promptTokens) return meta.promptTokens + (meta.completionTokens ?? 0)
+    }
+    return Math.round(messages.reduce((chars, message) => chars + (message.content?.length ?? 0), 0) / 3.5)
+  }, [messages])
+  const fit = contextFit(conversationTokens, draftChars, model.status?.contextWindow)
   const [completion, setCompletion] = useState<ChatCompletionMessage | null>()
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const { contextItems, removeContextItem } = useWorkspaceContext()
@@ -77,7 +140,162 @@ export const Chat = (props: ChatProps): JSX.Element => {
     clear: clearSearchReport,
     take: takeSearchReport
   } = useWorkspaceSearch()
+  // Kept as the events arrive, not on render, so a step that comes in
+  // right behind a chunk of text is placed after that chunk.
+  const completionRef = useRef<ChatCompletionMessage | null | undefined>()
+  completionRef.current = completion
+  const { steps: toolSteps, clear: clearToolSteps, take: takeToolSteps } = useToolSteps(
+    () => getThinkingMessage(String(completionRef.current?.content ?? "")).message
+  )
   const [isBottom, setIsBottom] = useState(false)
+  /*
+   * Following the reply as it grows is done here, not by Virtuoso's
+   * `followOutput`: that follows a growing last row only for a moment after
+   * each render and only on a change of its at-bottom state, so one jump
+   * of a tall code block leaves it behind for good. Here every change in
+   * the transcript's height, while following, pins the scroller to its
+   * end; scrolling up lets go, and coming back to the end takes hold again.
+   */
+  const [scroller, setScroller] = useState<HTMLElement | null>(null)
+  const followRef = useRef(true)
+  const [following, setFollowingState] = useState(true)
+  const lastTopRef = useRef(0)
+  /** Until when the end is still held after a reply stops, while its last rows settle. */
+  const settleUntilRef = useRef(0)
+  const setFollowing = useCallback((follow: boolean) => {
+    followRef.current = follow
+    setFollowingState(follow)
+  }, [])
+  const pinToEnd = useCallback(() => {
+    if (!scroller) return
+    scroller.scrollTop = scroller.scrollHeight
+    lastTopRef.current = scroller.scrollTop
+  }, [scroller])
+
+  useEffect(() => {
+    if (!scroller) return
+    // Only the reader lets go. The list moves the scroller itself as rows
+    // are measured, so a scroll up counts only just after a wheel, a touch,
+    // a key, or while the scrollbar is held.
+    let intent = 0
+    let dragging = false
+    let repin = 0
+    const meant = () => (intent = Date.now())
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) meant()
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (["ArrowUp", "PageUp", "Home"].includes(event.key)) meant()
+    }
+    const onDown = (event: MouseEvent) => {
+      // A press on the scroller itself, not on what is in it, is on its scrollbar.
+      if (event.target === scroller) dragging = true
+    }
+    const onUp = () => {
+      if (dragging) meant()
+      dragging = false
+    }
+    const onScroll = () => {
+      const gap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight
+      const byReader = dragging || Date.now() - intent < 500
+      if (byReader && scroller.scrollTop < lastTopRef.current - 1 && gap > 24) setFollowing(false)
+      else if (gap <= 24 && !followRef.current) setFollowing(true)
+      lastTopRef.current = scroller.scrollTop
+      // The list also moves the scroller with no change of height (making
+      // up for a row it measured): while following, that is put right too.
+      if (gap > 1 && followRef.current && !byReader && !repin) {
+        repin = requestAnimationFrame(() => {
+          repin = 0
+          onResize()
+        })
+      }
+    }
+    const onResize = () => {
+      if (!followRef.current) return
+      if (!generatingRef.current && Date.now() > settleUntilRef.current) return
+      scroller.scrollTop = scroller.scrollHeight
+      lastTopRef.current = scroller.scrollTop
+    }
+    // A transcript just opened starts at its end. (Virtuoso's own
+    // `initialTopMostItemIndex` keeps scrolling back to the top of that row
+    // for as long as rows are still being measured, which a reply that
+    // starts streaming at once never lets finish.)
+    settleUntilRef.current = Date.now() + 1000
+    onResize()
+    const observer = new ResizeObserver(onResize)
+    observer.observe(scroller)
+    // Rows not rendered are the list's padding, so its border box is the transcript's whole height.
+    const list = scroller.querySelector("[data-testid=virtuoso-item-list]")
+    if (list) observer.observe(list, { box: "border-box" })
+    scroller.addEventListener("scroll", onScroll, { passive: true })
+    scroller.addEventListener("wheel", onWheel, { passive: true })
+    scroller.addEventListener("touchmove", meant, { passive: true })
+    scroller.addEventListener("keydown", onKey)
+    scroller.addEventListener("mousedown", onDown)
+    window.addEventListener("mouseup", onUp)
+    return () => {
+      cancelAnimationFrame(repin)
+      observer.disconnect()
+      scroller.removeEventListener("scroll", onScroll)
+      scroller.removeEventListener("wheel", onWheel)
+      scroller.removeEventListener("touchmove", meant)
+      scroller.removeEventListener("keydown", onKey)
+      scroller.removeEventListener("mousedown", onDown)
+      window.removeEventListener("mouseup", onUp)
+    }
+  }, [scroller, setFollowing])
+
+  // A reply starting (a message sent, regenerated, edited, continued) takes
+  // the reader to it; one ending is held to its end while it settles.
+  useEffect(() => {
+    if (isLoading) {
+      setFollowing(true)
+      requestAnimationFrame(pinToEnd)
+    } else {
+      settleUntilRef.current = Date.now() + 1000
+    }
+  }, [isLoading, pinToEnd, setFollowing])
+  const { agentMode, toggleAgentMode, agentModeTeamOff, teamAgentRules } = useAgentMode()
+  const agentModeRef = useRef(agentMode)
+  agentModeRef.current = agentMode
+  const { autoRun, autoRunAvailable, toggleAutoRun, setAutoRun } = useAutoRun(teamAgentRules)
+  const [agentSettingsOpen, setAgentSettingsOpen] = useState(false)
+  const closeAgentSettings = useCallback(() => setAgentSettingsOpen(false), [])
+
+  // The composer's own settings: one global value, so a change shows at once.
+  const { context: storedComposer, setContext: setComposerSettings } = useStorageContext<ComposerSettingsValue>(
+    StorageType.Global,
+    GLOBAL_STORAGE_KEY.composerSettings
+  )
+  const composerSettings = useMemo(() => storedComposer ?? {}, [storedComposer])
+  // `twinny.chatSuggestions` off still means off, until a source is chosen here.
+  const [suggestionsSetting, setSuggestionsSetting] = useState(true)
+  useEffect(() => {
+    bridge
+      .request(EVENT_NAME.twinnyGetConfigValue, { key: "chatSuggestions" })
+      .then(({ value }) => setSuggestionsSetting(value !== false))
+      .catch(() => undefined)
+  }, [])
+  const suggestionSource = suggestionSourceOf(composerSettings, suggestionsSetting)
+  const composerFontSize = composerFontSizeOf(composerSettings)
+  const codeFontSize = codeFontSizeOf(composerSettings)
+  // What is read takes its size from these: the text size sets the prose (and the small type a step or two under
+  // it), the code size sets blocks, tool output and diffs. Code in backticks follows the prose.
+  const transcriptStyle = useMemo(() => {
+    const style: Record<string, string> = {}
+    if (composerFontSize) {
+      style["--tw-fs"] = `${composerFontSize}px`
+      style["--tw-fs-sm"] = `${composerFontSize - 1}px`
+      style["--tw-fs-xs"] = `${composerFontSize - 2}px`
+    }
+    if (codeFontSize) {
+      style["--tw-fs-mono"] = `${codeFontSize}px`
+      style["--tw-fs-mono-sm"] = `${codeFontSize - 1}px`
+    }
+    return Object.keys(style).length ? (style as React.CSSProperties) : undefined
+  }, [composerFontSize, codeFontSize])
+  const [composerSettingsOpen, setComposerSettingsOpen] = useState(false)
+  const closeComposerSettings = useCallback(() => setComposerSettingsOpen(false), [])
 
   const { conversation, saveLastConversation, setActiveConversation } =
     useConversationHistory()
@@ -90,6 +308,19 @@ export const Chat = (props: ChatProps): JSX.Element => {
   const promptHistoryRef = useRef<string[]>(loadPromptHistory())
   const recallIndexRef = useRef(-1)
   const draftRef = useRef("")
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  /*
+   * Messages typed while a reply is running: each goes out when the one
+   * before it is answered. Stopping the reply puts them back in the
+   * composer instead, since what they followed on from was cut short.
+   */
+  const [queued, setQueued] = useState<QueuedMessage[]>([])
+  const queuedRef = useRef<QueuedMessage[]>([])
+  const userStoppedRef = useRef(false)
+  const showShortcutsRef = useRef(false)
+  const lastEscapeRef = useRef(0)
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout>>()
+  const [hint, setHint] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState<number | null>(() => {
     const stored = Number(localStorage.getItem(COMPOSER_HEIGHT_KEY))
     return stored > 0 ? stored : null
@@ -108,9 +339,11 @@ export const Chat = (props: ChatProps): JSX.Element => {
     let incoming = added
     if (added.role === ASSISTANT) {
       const context = takeSearchReport()
-      if (context) incoming = { ...added, context }
+      const steps = takeToolSteps()
+      incoming = { ...added, ...(context ? { context } : {}), ...(steps ? { toolSteps: steps } : {}) }
     } else {
       clearSearchReport()
+      clearToolSteps()
     }
 
     setMessages((prev) => {
@@ -151,14 +384,19 @@ export const Chat = (props: ChatProps): JSX.Element => {
     handleAddMessage(incoming)
   })
 
-  useServerEvent(EVENT_NAME.twinnyOnCompletion, setCompletion)
+  useServerEvent(EVENT_NAME.twinnyOnCompletion, (incoming) => {
+    completionRef.current = incoming
+    setCompletion(incoming)
+  })
 
   useServerEvent(EVENT_NAME.twinnyOnLoading, () => setIsLoading(true))
 
   useServerEvent(EVENT_NAME.twinnyNewConversation, () => {
+    updateQueue([])
     setMessages([])
     setCompletion(null)
     clearSearchReport()
+    clearToolSteps()
     setActiveConversation({
       id: uuidv4(),
       title: t("chat-new-conversation-title"),
@@ -177,12 +415,50 @@ export const Chat = (props: ChatProps): JSX.Element => {
     setCompletion(null)
     stopRef.current = false
     generatingRef.current = false
+    const stopped = userStoppedRef.current
+    userStoppedRef.current = false
+    const [next, ...rest] = queuedRef.current
+    if (next && !stopped) {
+      updateQueue(rest)
+      // After this event's own state updates, so the reply is in the transcript first.
+      setTimeout(() => sendRef.current(next), 0)
+      return
+    }
+    if (next) restoreQueue()
     setTimeout(() => {
       chatRef.current?.focus()
     }, 200)
   })
 
+  const updateQueue = (next: QueuedMessage[]) => {
+    queuedRef.current = next
+    setQueued(next)
+  }
+
+  // A queued message the model has read is in the reply now, no longer
+  // waiting. Taken as the steps arrive, ahead of the reply's end, which
+  // sends what is still queued.
+  useServerEvent(EVENT_NAME.twinnyToolSteps, (incoming) => {
+    const read = new Set((incoming ?? []).filter((step) => step.said).map((step) => step.id))
+    if (!read.size) return
+    const left = queuedRef.current.filter((message) => !read.has(`said.${message.id}`))
+    if (left.length !== queuedRef.current.length) updateQueue(left)
+  })
+
+  /* Queued messages back in the composer, after anything already typed there. */
+  const restoreQueue = () => {
+    const editor = editorRef.current
+    const waiting = queuedRef.current
+    updateQueue([])
+    if (!editor || !waiting.length) return
+    const draft = editor.isEmpty ? "" : editor.getHTML()
+    editor.commands.setContent(draft + waiting.map((message) => message.html).join(""), false)
+    imagesRef.current = [...imagesRef.current, ...waiting.flatMap((message) => message.images)]
+    editor.commands.focus("end")
+  }
+
   const handleStopGeneration = useCallback(() => {
+    userStoppedRef.current = true
     emit(EVENT_NAME.twinnyStopGeneration)
   }, [])
 
@@ -193,6 +469,7 @@ export const Chat = (props: ChatProps): JSX.Element => {
     generatingRef.current = true
     setIsLoading(true)
     clearSearchReport()
+    clearToolSteps()
     setMessages((prev) => {
       if (!prev) return prev
       const updatedMessages = prev.slice(0, index)
@@ -226,6 +503,19 @@ export const Chat = (props: ChatProps): JSX.Element => {
     })
   }
 
+  /** A reply's changed files after an undo: kept with the message and saved. */
+  const handleChangesUpdate = useCallback(
+    (index: number, changes: ReplyChangesView) => {
+      setMessages((prev) => {
+        if (!prev?.[index] || prev[index].changes?.id !== changes.id) return prev
+        const updatedMessages = prev.map((message, i) => (i === index ? { ...message, changes } : message))
+        saveLastConversation({ ...conversation, messages: updatedMessages })
+        return updatedMessages
+      })
+    },
+    [conversation, saveLastConversation]
+  )
+
   const handleEditMessage = (
     message: string,
     index: number,
@@ -235,6 +525,7 @@ export const Chat = (props: ChatProps): JSX.Element => {
     generatingRef.current = true
     setIsLoading(true)
     clearSearchReport()
+    clearToolSteps()
     setMessages((prev) => {
       if (!prev) return prev
 
@@ -322,9 +613,144 @@ export const Chat = (props: ChatProps): JSX.Element => {
     editorRef.current?.commands.clearContent()
   }, [])
 
+  const setShortcuts = useCallback((open: boolean) => {
+    showShortcutsRef.current = open
+    setShowShortcuts(open)
+    // One sheet at a time above the composer.
+    if (open) {
+      setAgentSettingsOpen(false)
+      setComposerSettingsOpen(false)
+    }
+  }, [])
+
+  /* The draft goes into the prompt history, so the up arrow brings it back. */
+  const clearDraft = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || editor.isEmpty) return false
+    rememberPrompt(editor.getHTML())
+    imagesRef.current = []
+    editor.commands.clearContent()
+    return true
+  }, [])
+
+  /* A command or change waiting on the user, answered from the keys. */
+  const waitingStepRef = useRef<ToolStepView>()
+  waitingStepRef.current = toolSteps.find((step) => step.status === "waiting")
+  const approveWaiting = useCallback((how: "run" | "always" | "skip") => {
+    const step = waitingStepRef.current
+    if (!step) return false
+    // A question is answered with what is written and sent; Enter on nothing leaves it waiting.
+    if (step.approval === "question") {
+      if (how === "skip") answerToolStep(step, "skip")
+      return how !== "always"
+    }
+    // Shift+Enter means Always run, which only a command the team lets
+    // run unasked has; on a change or such a command it is a new line.
+    if (how === "always" && (step.approval !== "command" || step.noAlways)) return false
+    answerToolStep(step, how)
+    return true
+  }, [])
+
+  const stopIfGenerating = useCallback(() => {
+    if (!generatingRef.current) return false
+    userStoppedRef.current = true
+    emit(EVENT_NAME.twinnyStopGeneration)
+    return true
+  }, [])
+
+  /*
+   * Esc closes the shortcuts, else skips what a tool is waiting on, else
+   * stops a reply, else clears the draft on the second press. False leaves
+   * the key to the editor.
+   */
+  const handleEscape = useCallback(() => {
+    if (showShortcutsRef.current) {
+      setShortcuts(false)
+      return true
+    }
+    if (approveWaiting("skip")) return true
+    if (stopIfGenerating()) return true
+    const editor = editorRef.current
+    if (!editor || editor.isEmpty) return false
+
+    clearTimeout(hintTimerRef.current)
+    if (Date.now() - lastEscapeRef.current < DOUBLE_ESCAPE_MS) {
+      lastEscapeRef.current = 0
+      setHint(null)
+      return clearDraft()
+    }
+    lastEscapeRef.current = Date.now()
+    setHint(t("shortcuts-esc-again"))
+    hintTimerRef.current = setTimeout(() => setHint(null), DOUBLE_ESCAPE_MS)
+    return true
+  }, [approveWaiting, clearDraft, setShortcuts, stopIfGenerating, t])
+
+  /* Ctrl+C with nothing selected; with a selection it is still a copy. */
+  const handleInterrupt = useCallback(() => {
+    if (!window.getSelection()?.isCollapsed) return false
+    return stopIfGenerating() || clearDraft()
+  }, [clearDraft, stopIfGenerating])
+
+  const toggleShortcuts = useCallback(() => {
+    setShortcuts(!showShortcutsRef.current)
+    return true
+  }, [setShortcuts])
+
+  const scrollTranscript = useCallback((direction: -1 | 1) => {
+    if (direction < 0) setFollowing(false)
+    virtuosoRef.current?.scrollBy({
+      top: direction * window.innerHeight * 0.6
+    })
+    return true
+  }, [])
+
+  useEffect(() => () => clearTimeout(hintTimerRef.current), [])
+
+  /** One message to the model: into the transcript and out to the extension. */
+  const sendMessage = (message: QueuedMessage) => {
+    generatingRef.current = true
+    setIsLoading(true)
+    clearSearchReport()
+    clearToolSteps()
+
+    const conversationId = conversation?.id || uuidv4()
+
+    setMessages((prevMessages) => {
+      const updatedMessages: ChatCompletionMessage[] = [
+        ...(prevMessages || []),
+        {
+          role: USER,
+          content: message.input,
+          images: message.images.length > 0 ? message.images : undefined
+        }
+      ]
+
+      const currentConversation = {
+        id: conversationId,
+        messages: updatedMessages,
+        title: conversation?.title || t("chat-new-conversation-title")
+      }
+
+      saveLastConversation(currentConversation)
+      setActiveConversation(currentConversation)
+
+      emit(EVENT_NAME.twinnyChatMessage, {
+        messages: updatedMessages,
+        mentions: message.mentions,
+        conversationId
+      })
+
+      return updatedMessages
+    })
+  }
+  // The queue sends from an event handler; it always reaches this render's.
+  const sendRef = useRef(sendMessage)
+  sendRef.current = sendMessage
+
+  /** Sends the composer's message, or queues it while a reply is running. */
   const handleSubmitForm = useCallback(() => {
-    const input = editorRef.current
-      ?.getHTML()
+    const html = editorRef.current?.getHTML() || ""
+    const input = html
       .replace(/<p>/g, "")
       .replace(/<\/p>/g, "<br>")
       .replace(/<br>$/, "")
@@ -335,68 +761,64 @@ export const Chat = (props: ChatProps): JSX.Element => {
       .text()
       .trim()
 
-    if (!text || generatingRef.current || !input || chatDisabled) return
+    if (!text || !input || chatDisabled) return
 
-    generatingRef.current = true
+    // A question the model is waiting on is answered by what is sent, from the key or the button.
+    const asked = waitingStepRef.current
+    if (asked?.approval === "question") {
+      answerToolQuestion(asked, text)
+      editorRef.current?.commands.clearContent()
+      return
+    }
 
-    const mentions = getMentions()
-
-    setIsLoading(true)
-    clearSearchReport()
+    const message: QueuedMessage = {
+      id: uuidv4(),
+      html,
+      input,
+      text,
+      mentions: getMentions(),
+      images: imagesRef.current
+    }
+    imagesRef.current = []
     clearEditor()
+    rememberPrompt(html)
 
-    rememberPrompt(editorRef.current?.getHTML() || "")
-
-    const conversationId = conversation?.id || uuidv4()
-
-    setMessages((prevMessages) => {
-      const updatedMessages: ChatCompletionMessage[] = [
-        ...(prevMessages || []),
-        {
-          role: USER,
-          content: input,
-          images: imagesRef.current.length > 0 ? imagesRef.current : undefined
-        }
-      ]
-
-      const currentConversation = {
-        id: conversationId,
-        messages: updatedMessages,
-        title: conversation?.title || t("chat-new-conversation-title")
-      }
-
-      imagesRef.current = []
-      saveLastConversation(currentConversation)
-      setActiveConversation(currentConversation)
-
-      emit(EVENT_NAME.twinnyChatMessage, {
-        messages: updatedMessages,
-        mentions,
-        conversationId
-      })
-
-      return updatedMessages
-    })
-  }, [conversation?.id, t, chatDisabled, clearSearchReport])
+    if (generatingRef.current) {
+      // In agent mode the model can read it between steps; one that brings
+      // files or images waits for a turn of its own, where those are added.
+      const steer = agentModeRef.current && !message.mentions.length && !message.images.length
+      updateQueue([...queuedRef.current, { ...message, steer }])
+      if (steer) emit(EVENT_NAME.twinnySteer, { id: message.id, text: steeringText(input) })
+      return
+    }
+    sendRef.current(message)
+  }, [chatDisabled])
 
   /*
    * A stopped reply is picked up by asking for the rest. The transcript
-   * shows a short "Continue"; the model is told not to start over.
+   * shows a short "Continue"; the model is told not to start over. One that
+   * ran out of tool steps goes back to the task, with what its tools did
+   * in the notes this turn carries.
    */
   const handleContinue = useCallback(() => {
     if (generatingRef.current || chatDisabled) return
     generatingRef.current = true
     setIsLoading(true)
     clearSearchReport()
+    clearToolSteps()
     setMessages((prev) => {
+      const last = prev?.[prev.length - 1]
+      const outOfSteps = !!last?.meta?.outOfSteps && !last.meta.stopped
       const updatedMessages: ChatCompletionMessage[] = [
         ...(prev || []),
         {
           role: USER,
           content: t("reply-continue"),
-          prompt:
-            "Continue exactly where your last reply stopped. " +
-            "Do not repeat anything you already wrote."
+          prompt: outOfSteps
+            ? "Carry on with the task from where your last reply got to, using the tools again as you need them. " +
+              "Do not redo steps that already worked."
+            : "Continue exactly where your last reply stopped. " +
+              "Do not repeat anything you already wrote."
         }
       ]
       saveLastConversation({ ...conversation, messages: updatedMessages })
@@ -407,7 +829,7 @@ export const Chat = (props: ChatProps): JSX.Element => {
       })
       return updatedMessages
     })
-  }, [conversation, chatDisabled, clearSearchReport, t])
+  }, [conversation, chatDisabled, clearSearchReport, clearToolSteps, t])
 
   const handleOpenAsMarkdown = useCallback(() => {
     if (!messages.length) return
@@ -430,11 +852,71 @@ export const Chat = (props: ChatProps): JSX.Element => {
     emit(EVENT_NAME.twinnyNewConversation)
   }, [setActiveConversation, t])
 
+  // The composer's key map outlives a render, so it calls through a ref.
+  const newConversationRef = useRef(handleNewConversation)
+  newConversationRef.current = handleNewConversation
+
+  const startNewConversation = useCallback(() => {
+    stopIfGenerating()
+    newConversationRef.current()
+    return true
+  }, [stopIfGenerating])
+
+  useServerEvent(EVENT_NAME.twinnyShowShortcuts, () => setShortcuts(true))
+
+  /*
+   * The same keys with the focus on the transcript rather than the composer.
+   * Anything typed there goes to the composer.
+   */
+  useEffect(() => {
+    if (!active) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.altKey) return
+      const target = e.target instanceof Element ? e.target : null
+      if (target?.closest(KEY_OWNERS)) return
+
+      let handled = false
+      if (e.ctrlKey) {
+        if (e.shiftKey) return
+        if (e.key === "c") {
+          handled = handleInterrupt()
+        } else if (e.key === "l") {
+          handled = startNewConversation()
+        }
+      } else if (e.key === "Escape") {
+        handled = handleEscape()
+      } else if (e.key === "?") {
+        handled = toggleShortcuts()
+      } else if (e.key.length === 1 && e.key !== " " && !chatDisabled) {
+        // Not handled: the key itself lands in the composer.
+        if (!target?.closest("button, vscode-button, a, summary")) {
+          editorRef.current?.commands.focus("end")
+        }
+      }
+      if (handled) e.preventDefault()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [
+    active,
+    chatDisabled,
+    handleEscape,
+    handleInterrupt,
+    startNewConversation,
+    toggleShortcuts
+  ])
+
   const handleOpenFile = useCallback((filePath: string) => {
     emit(EVENT_NAME.twinnyOpenFile, filePath)
   }, [])
 
-  useEffect(() => emit(EVENT_NAME.twinnyHideBackButton), [])
+  // Coming back to the chat hides the other tabs' back button and puts the
+  // cursor in the composer, as opening it did when it was remounted.
+  useEffect(() => {
+    if (!active) return
+    emit(EVENT_NAME.twinnyHideBackButton)
+    editorRef.current?.commands.focus()
+  }, [active])
 
   useEffect(() => {
     if (editorRef.current) emit(EVENT_NAME.twinnySidebarReady)
@@ -445,8 +927,12 @@ export const Chat = (props: ChatProps): JSX.Element => {
   }, [])
 
   // Switching conversation shows its messages, including none for a new one.
+  // Messages queued in the one left belong to it, and are not sent here.
   useEffect(() => {
     if (conversation?.id) setMessages(conversation.messages || [])
+    if (queuedRef.current.length) updateQueue([])
+    setFollowing(true)
+    settleUntilRef.current = Date.now() + 1000
   }, [conversation?.id])
 
   const { suggestion, filePaths } = useSuggestion()
@@ -455,6 +941,17 @@ export const Chat = (props: ChatProps): JSX.Element => {
     () => suggestion,
     [JSON.stringify(filePaths)]
   )
+
+  const { updateSuggestion, suggestionStatus } = useComposerSuggestions({
+    editorRef,
+    messages,
+    promptHistoryRef,
+    busyRef: generatingRef,
+    source: suggestionSource
+  })
+  // The editor keeps the handlers it was made with; this one changes.
+  const updateSuggestionRef = useRef(updateSuggestion)
+  updateSuggestionRef.current = updateSuggestion
 
   const CustomImageExtension = createCustomImageExtension((id: string) => {
     imagesRef.current = imagesRef.current.filter((img) => img.id !== id)
@@ -480,12 +977,15 @@ export const Chat = (props: ChatProps): JSX.Element => {
           handleSubmitForm,
           clearEditor,
           recallPrompt,
-          stopGeneration: () => {
-            if (!generatingRef.current) return false
-            emit(EVENT_NAME.twinnyStopGeneration)
-            return true
-          }
+          escape: handleEscape,
+          approve: approveWaiting,
+          interrupt: handleInterrupt,
+          newConversation: startNewConversation,
+          toggleShortcuts,
+          toggleAgentMode,
+          scrollTranscript
         }),
+        GhostText,
         Placeholder.configure({
           placeholder: t("placeholder"),
           // Still shown while the composer is off for want of a provider.
@@ -493,11 +993,25 @@ export const Chat = (props: ChatProps): JSX.Element => {
         })
       ],
       // Typing into a recalled prompt makes it the draft.
-      onUpdate: () => {
+      onUpdate: ({ editor }) => {
+        setDraftChars(editor.getText().length)
         recallIndexRef.current = -1
+        lastEscapeRef.current = 0
+        if (showShortcutsRef.current) setShortcuts(false)
+        updateSuggestionRef.current()
       }
     },
-    [memoizedSuggestion, handleSubmitForm, clearEditor, recallPrompt, t, imagesRef]
+    [
+      memoizedSuggestion,
+      handleSubmitForm,
+      clearEditor,
+      recallPrompt,
+      handleEscape,
+      handleInterrupt,
+      startNewConversation,
+      t,
+      imagesRef
+    ]
   )
 
   useEffect(() => {
@@ -673,11 +1187,13 @@ export const Chat = (props: ChatProps): JSX.Element => {
   )
 
   const scrollToBottom = useCallback(() => {
+    setFollowing(true)
     virtuosoRef.current?.scrollTo({
       top: Infinity,
       behavior: "auto"
     })
-  }, [])
+    pinToEnd()
+  }, [pinToEnd, setFollowing])
 
   const renderContextItem = useCallback(
     (item: AnyContextItem) => {
@@ -719,21 +1235,27 @@ export const Chat = (props: ChatProps): JSX.Element => {
     [handleOpenFile, removeContextItem]
   )
 
+  // The reply in progress is a row of its own, after the messages: when it
+  // ends, the finished message takes that row's place and nothing moves.
+  const pending = isLoading || !!completion
   const itemContent = useCallback(
     (index: number) => (
       <MessageItem
         key={`message-list-${index}`}
+        pending={index >= messages.length}
         completion={completion}
         context={searchReport}
+        steps={toolSteps}
         generatingRef={generatingRef}
         handleDeleteImage={handleDeleteImage}
         handleDeleteMessage={handleDeleteMessage}
         handleEditMessage={handleEditMessage}
         handleRegenerateMessage={handleRegenerateMessage}
         handleContinue={handleContinue}
-        index={index}
+        handleChangesUpdate={handleChangesUpdate}
+        index={Math.min(index, messages.length - 1)}
         isLoading={isLoading}
-        message={messages[index]}
+        message={messages[Math.min(index, messages.length - 1)]}
         messages={messages}
       />
     ),
@@ -742,10 +1264,12 @@ export const Chat = (props: ChatProps): JSX.Element => {
       handleEditMessage,
       handleRegenerateMessage,
       handleContinue,
+      handleChangesUpdate,
       isLoading,
       messages,
       completion,
       searchReport,
+      toolSteps,
       generatingRef
     ]
   )
@@ -777,16 +1301,20 @@ export const Chat = (props: ChatProps): JSX.Element => {
             {contextItems.map(renderContextItem)}
           </div>
         )}
-        <div className={styles.transcript}>
+        <div className={styles.transcript} style={messages.length ? transcriptStyle : undefined}>
           {messages.length === 0 ? (
-            <EmptyChat />
+            <EmptyChat
+              status={model.status}
+              warming={model.warming}
+              onWarm={model.warm}
+              disabled={!!generatingRef.current}
+            />
           ) : (
             <Virtuoso
-              followOutput
               style={{ height: "100%" }}
               ref={virtuosoRef}
-              data={messages}
-              initialTopMostItemIndex={messages?.length}
+              scrollerRef={(element) => setScroller(element instanceof HTMLElement ? element : null)}
+              totalCount={messages.length + (pending ? 1 : 0)}
               defaultItemHeight={800}
               itemContent={itemContent}
               atBottomThreshold={20}
@@ -800,9 +1328,10 @@ export const Chat = (props: ChatProps): JSX.Element => {
         )}
         <div className={styles.chatOptions}>
           <div>
-            {!isBottom && messages.length > 0 && (
+            {!isBottom && messages.length > 0 && !(following && isLoading) && (
               <VSCodeButton
                 appearance="icon"
+                className={styles.scrollDown}
                 onClick={scrollToBottom}
                 title={t("scroll-to-bottom")}
               >
@@ -810,13 +1339,59 @@ export const Chat = (props: ChatProps): JSX.Element => {
               </VSCodeButton>
             )}
           </div>
-          {!!selection.length && (
-            <span className={styles.selectionCount}>
-              {t("selection-chars", { chars: selection.length })}
-            </span>
+          {hint ? (
+            <span className={styles.selectionCount}>{hint}</span>
+          ) : (
+            !!selection.length && (
+              <span className={styles.selectionCount}>
+                {t("selection-chars", { chars: selection.length })}
+              </span>
+            )
           )}
         </div>
-        <div className={styles.composer}>
+        <div className={cx(styles.composer, { [styles.agentBusy]: agentMode && (isLoading || generatingRef.current) })}>
+          {showShortcuts && <Shortcuts />}
+          {agentMode && agentSettingsOpen && (
+            <AgentSettings team={teamAgentRules} autoRun={autoRun} setAutoRun={setAutoRun} onClose={closeAgentSettings} />
+          )}
+          {composerSettingsOpen && (
+            <ComposerSettings
+              settings={composerSettings}
+              source={suggestionSource}
+              status={suggestionStatus}
+              onChange={setComposerSettings}
+              onClose={closeComposerSettings}
+            />
+          )}
+          {!!queued.length && (
+            <ol className={styles.queue} aria-label={t("queued-title")}>
+              {queued.map((message) => (
+                <li key={message.id} className={styles.queued}>
+                  <span
+                    className={styles.queuedLabel}
+                    title={message.steer ? t("queued-steer-title") : undefined}
+                  >
+                    {t(message.steer ? "queued-steer" : "queued")}
+                  </span>
+                  <span className={styles.queuedText} title={message.text}>
+                    {message.text}
+                  </span>
+                  <button
+                    type="button"
+                    className={styles.queuedRemove}
+                    onClick={() => {
+                      if (message.steer) emit(EVENT_NAME.twinnySteer, { id: message.id })
+                      updateQueue(queuedRef.current.filter((entry) => entry.id !== message.id))
+                    }}
+                    title={t("queued-remove")}
+                    aria-label={t("queued-remove")}
+                  >
+                    <i className="codicon codicon-close" />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
           <div
             role="separator"
             aria-orientation="horizontal"
@@ -833,9 +1408,12 @@ export const Chat = (props: ChatProps): JSX.Element => {
           <form onDrop={handleDrop} onPaste={handlePaste}>
             <div
               className={cx(styles.chatBox, {
-                [styles.chatBoxDisabled]: chatDisabled
+                [styles.chatBoxDisabled]: chatDisabled,
+                [styles.agent]: agentMode
               })}
               title={chatDisabled ? t("chat-disabled-no-provider") : undefined}
+              // The draft, its grey suggestion and the chevron beside it all take their size from this.
+              style={composerFontSize ? ({ "--tw-fs": `${composerFontSize}px` } as React.CSSProperties) : undefined}
               onMouseDown={handleComposerMouseDown}
             >
               <input
@@ -847,7 +1425,7 @@ export const Chat = (props: ChatProps): JSX.Element => {
                 style={{ display: "none" }}
               />
               <span className={styles.prompt} aria-hidden="true">
-                &#10095;
+                {agentMode ? <>&#10095;&#10095;</> : <>&#10095;</>}
               </span>
               <div
                 ref={editorWrapRef}
@@ -863,7 +1441,70 @@ export const Chat = (props: ChatProps): JSX.Element => {
                   editor={editorRef.current}
                 />
               </div>
+              <div className={styles.modeSwitches}>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentMode}
+                  disabled={chatDisabled || agentModeTeamOff}
+                  className={cx(styles.agentToggle, { [styles.agentToggleOn]: agentMode })}
+                  onClick={toggleAgentMode}
+                  title={t(
+                    agentModeTeamOff ? "agent-mode-team-off-title" : agentMode ? "agent-mode-on-title" : "agent-mode-off-title"
+                  )}
+                >
+                  <span className={styles.agentDot} aria-hidden="true" />
+                  {t(agentMode ? "agent-mode-on" : "agent-mode")}
+                  <span className={styles.switchKey}>{t("agent-mode-key")}</span>
+                </button>
+                {agentMode && autoRunAvailable && (
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoRun}
+                    disabled={chatDisabled}
+                    className={cx(styles.agentToggle, { [styles.agentToggleOn]: autoRun })}
+                    onClick={toggleAutoRun}
+                    title={t(autoRun ? "auto-run-on-title" : "auto-run-off-title")}
+                  >
+                    <span className="codicon codicon-terminal" aria-hidden="true" />
+                    <span className={styles.switchLabel}>{t("auto-run")}</span>
+                  </button>
+                )}
+                {agentMode && (
+                  <button
+                    type="button"
+                    data-agent-settings-toggle
+                    aria-expanded={agentSettingsOpen}
+                    className={cx(styles.agentToggle, { [styles.agentToggleOn]: agentSettingsOpen })}
+                    onClick={() => {
+                      setComposerSettingsOpen(false)
+                      setShortcuts(false)
+                      setAgentSettingsOpen((open) => !open)
+                    }}
+                    title={t("agent-settings-title")}
+                    aria-label={t("agent-settings-title")}
+                  >
+                    <span className="codicon codicon-settings-gear" aria-hidden="true" />
+                  </button>
+                )}
+              </div>
               <div className={styles.chatButtons}>
+                <VSCodeButton
+                  appearance="icon"
+                  role="button"
+                  data-composer-settings-toggle
+                  aria-expanded={composerSettingsOpen}
+                  onClick={() => {
+                    setAgentSettingsOpen(false)
+                    setShortcuts(false)
+                    setComposerSettingsOpen((open) => !open)
+                  }}
+                  title={t("composer-settings-title")}
+                  aria-label={t("composer-settings-title")}
+                >
+                  <span className="codicon codicon-text-size" />
+                </VSCodeButton>
                 <VSCodeButton
                   appearance="icon"
                   role="button"
@@ -877,7 +1518,7 @@ export const Chat = (props: ChatProps): JSX.Element => {
                   <VSCodeButton
                     appearance="icon"
                     role="button"
-                    className={styles.stopButton}
+                    className={cx(styles.sendButton, styles.stopButton)}
                     onClick={handleStopGeneration}
                     title={t("stop-generation-esc")}
                     aria-label={t("stop-generation")}
@@ -889,10 +1530,11 @@ export const Chat = (props: ChatProps): JSX.Element => {
                     appearance="icon"
                     role="button"
                     disabled={chatDisabled}
+                    className={styles.sendButton}
                     onClick={handleSubmitForm}
                     title={t("send")}
                   >
-                    <span className="codicon codicon-send"></span>
+                    <span className="codicon codicon-arrow-up"></span>
                   </VSCodeButton>
                 )}
               </div>
@@ -900,6 +1542,26 @@ export const Chat = (props: ChatProps): JSX.Element => {
           </form>
           <div className={styles.footer}>
             <ProviderSelect />
+            <span className={styles.footerEnd}>
+              <ModelState
+                status={model.status}
+                fit={fit}
+                model={chatProvider?.modelName}
+                warming={model.warming}
+                onWarm={model.warm}
+                hideLoad={messages.length === 0}
+              />
+            </span>
+            <button
+              type="button"
+              className={styles.shortcutsHint}
+              onClick={toggleShortcuts}
+              aria-expanded={showShortcuts}
+              title={t("shortcuts-hint")}
+            >
+              <span className={styles.shortcutsHintText}>{t("shortcuts-hint")}</span>
+              <span className={styles.shortcutsHintKey}>?</span>
+            </button>
           </div>
         </div>
       </div>

@@ -19,7 +19,7 @@ What you get:
 - **Operations.** A hash-chained audit log, read-only admin keys, Prometheus at `/metrics`, costs when a model has a price, a bounded queue for a busy GPU, Docker and Helm.
 
 Free for up to 5 developers (active keys), for good. Larger teams install a
-licence token, $6 a seat a month from [twinny.dev](https://twinny.dev/#pricing),
+licence token, $15 a seat a month from [twinny.dev](https://twinny.dev/#pricing),
 or a free [30-day trial](https://twinny.dev/#trial) first; see
 [Licensing and seats](https://docs.twinny.dev/teams/licensing/).
 The server never contacts Twinny. What changed in each version is in the
@@ -47,6 +47,12 @@ answering and the team defaults should name real models. If no server was
 running, the file has placeholder names to change there. The admin page
 shows usage by developer and model, backend status, keys and sign-in
 requests.
+
+After that, `twinny-server` on its own starts the same gateway from any
+directory: it uses `$TWINNY_CONFIG`, then `./twinny.gateway.json`, then the
+configuration it served last, then `~/twinny.gateway.json`. With none of
+those on a terminal it runs the quickstart; under systemd, Docker or CI it
+says where it looked and exits with `2` instead of writing a gateway.
 
 The same, step by step:
 
@@ -77,10 +83,11 @@ front of it. Anything but loopback is exposed to that network.
 
 | Command | What it does |
 | --- | --- |
+| `twinny-server [--port <n>] [--host <addr>]` | Starts this machine's gateway (the configuration is found as above); on a terminal with none yet, or with no admin key yet, runs the quickstart first. |
 | `twinny-server quickstart [--yes] [--fresh] [--admin <name>] [--backend [kind=]host[:port]]` | Finds the model server (or asks the named one) for its models and writes the configuration if missing, makes an admin key if there is none, serves. `--yes` skips the questions; `--fresh` wipes keys, licence, usage, recordings and the configuration first. |
 | `twinny-server init [file] [--backend [kind=]host[:port]]` | Writes a starter configuration for one server (`lmstudio=10.0.0.5`, `llamacpp=gpu-box:8080`, `http://host:8000`; Ollama here by default). Never overwrites. |
 | `twinny-server reset --yes [--all]` | Removes keys, licence, usage and recordings; `--all` also the configuration file. Without `--yes` it only lists them. |
-| `twinny-server serve --config <file> [--port <n>] [--host <addr>]` | Runs the gateway until SIGINT/SIGTERM. `--demo` serves a public, read-only admin page with one-hour guest keys. |
+| `twinny-server serve [--config <file>] [--port <n>] [--host <addr>]` | Runs the gateway until SIGINT/SIGTERM; never sets one up. Without `--config` it finds the configuration as above. `--demo` serves a public, read-only admin page with one-hour guest keys. |
 | `twinny-server keys create <name>` | Makes an access key for a developer. Printed once; only its hash is stored. |
 | `twinny-server keys list` / `revoke <name>` | Shows keys; stops one, effective without a restart. |
 | `twinny-server usage [--since 7d] [--by key]` | Requests, failures and reported token counts by key and model. |

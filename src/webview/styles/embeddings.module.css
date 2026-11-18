@@ -19,8 +19,9 @@
 
 .card {
   padding: 10px 12px 12px;
-  border: 1px solid var(--tw-rule);
-  background: var(--tw-surface);
+  border: 1px solid transparent;
+  border-radius: var(--tw-radius);
+  background: var(--tw-fill);
 }
 
 .cardHeader,
@@ -108,7 +109,7 @@
 
 .progressFill {
   height: 100%;
-  background: var(--tw-accent);
+  background: var(--tw-mark);
   transition: width 0.2s ease;
 }
 
@@ -149,6 +150,7 @@
   padding: 10px 12px;
   border: 1px dashed var(--tw-rule);
   color: var(--tw-fg-dim);
+  border-radius: var(--tw-radius);
 }
 
 .field {
@@ -164,7 +166,7 @@
   justify-content: space-between;
   color: var(--tw-fg-dim);
   font-size: var(--tw-fs-xs);
-  letter-spacing: var(--tw-track);
+  letter-spacing: var(--tw-track-caps);
   text-transform: uppercase;
 }
 
@@ -205,7 +207,7 @@
 .slider {
   width: 100%;
   margin: 4px 0;
-  accent-color: var(--tw-accent);
+  accent-color: var(--tw-mark);
 }
 
 .actions {

@@ -119,24 +119,37 @@ export const PRESETS: ProviderPreset[] = [
   local(API_PROVIDERS.LiteLLM, "chat"),
   local(API_PROVIDERS.Oobabooga, "chat"),
   gateway("chat"),
+  hosted(
+    API_PROVIDERS.ChatGPTPlan,
+    "ChatGPT Plan",
+    <SvgOpenAI />,
+    ""
+  ),
   hosted(API_PROVIDERS.OpenAI, "OpenAI", <SvgOpenAI />, "gpt-4.1"),
   hosted(
     API_PROVIDERS.Anthropic,
     "Anthropic",
     <SvgAnthropic />,
-    "claude-sonnet-4-20250514"
+    "claude-sonnet-5-5"
   ),
-  hosted(API_PROVIDERS.Deepseek, "DeepSeek", <SvgDeepseek />, "deepseek-chat"),
-  hosted(API_PROVIDERS.Gemini, "Gemini", <SvgGemini />, "gemini-2.5-pro-preview-05-06"),
+  hosted(API_PROVIDERS.Deepseek, "DeepSeek", <SvgDeepseek />, "deepseek-flash"),
+  hosted(API_PROVIDERS.Gemini, "Gemini", <SvgGemini />, "gemini-3.8-flash"),
   hosted(API_PROVIDERS.Groq, "Groq", <SvgGroq />, "llama-3.3-70b-versatile"),
   hosted(API_PROVIDERS.Mistral, "Mistral", <SvgMistral />, "mistral-small-latest"),
   hosted(API_PROVIDERS.OpenRouter, "OpenRouter", <SvgOpenRouter />, "openai/gpt-4.1"),
-  hosted(API_PROVIDERS.Cohere, "Cohere", <SvgCohere />, "command-r-plus"),
+  hosted(
+    API_PROVIDERS.DemonRoute,
+    "DemonRoute",
+    codicon("plug"),
+    "shoukewei/Qwen3.8-27B-OBLITERATED22-AGENT",
+    "chat"
+  ),
+  hosted(API_PROVIDERS.Cohere, "Cohere", <SvgCohere />, "command-a-plus-05-2026"),
   hosted(
     API_PROVIDERS.Perplexity,
     "Perplexity",
     <SvgPerplexity />,
-    "llama-3.1-sonar-small-128k-online"
+    "sonar"
   ),
   // fim
   local(API_PROVIDERS.Ollama, "fim", "", FIM_TEMPLATE_FORMAT.automatic),
@@ -144,6 +157,13 @@ export const PRESETS: ProviderPreset[] = [
   local(API_PROVIDERS.LlamaCpp, "fim", "", FIM_TEMPLATE_FORMAT.automatic),
   local(API_PROVIDERS.OpenAICompatible, "fim", "", FIM_TEMPLATE_FORMAT.automatic),
   gateway("fim"),
+  hosted(
+    API_PROVIDERS.ChatGPTPlan,
+    "ChatGPT Plan",
+    <SvgOpenAI />,
+    "",
+    "fim"
+  ),
   hosted(
     API_PROVIDERS.Mistral,
     "Codestral",
